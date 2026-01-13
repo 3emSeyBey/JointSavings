@@ -3,8 +3,7 @@ import {
   collection, 
   doc, 
   onSnapshot, 
-  setDoc, 
-  addDoc,
+  setDoc,
   query,
   orderBy
 } from 'firebase/firestore';
