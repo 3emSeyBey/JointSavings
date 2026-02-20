@@ -1,10 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { 
-  collection, 
-  doc, 
-  onSnapshot, 
-  setDoc, 
-  addDoc,
+  collection,
+  doc,
+  onSnapshot,
+  setDoc,
   query,
   orderBy
 } from 'firebase/firestore';

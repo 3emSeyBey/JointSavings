@@ -4,6 +4,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useSession } from '@/hooks/useSession';
 import { useProfiles, useTransactions, useGoals } from '@/hooks/useFirestore';
 import { useSavingsTarget } from '@/hooks/useSavingsTarget';
+import { useGameSession } from '@/hooks/useGameSession';
 import { THEMES, DEFAULT_PROFILES } from '@/lib/constants';
 import { getTodayISO } from '@/lib/utils';
 import {
@@ -17,6 +18,7 @@ import {
   AIChat,
   ParticlesBackground,
   SavingsTargets,
+  MiniGames,
 } from '@/components';
 import type { ViewType, TabType, NewTransaction, Profile, NewGoal } from '@/types';
 
@@ -41,6 +43,15 @@ export default function App() {
   const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [needsPinVerification, setNeedsPinVerification] = useState(false);
+
+  const {
+    session: gameSession,
+    pendingInvite,
+    createSession,
+    joinSession,
+    updateSession: updateGameSession,
+    endSession,
+  } = useGameSession(!!user, currentProfileId);
 
   // Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -162,6 +173,15 @@ export default function App() {
     await addGoal(currentProfileId, newGoal);
   };
 
+  const handleAcceptGame = async () => {
+    await joinSession();
+    setActiveTab('games');
+  };
+
+  const handleDeclineGame = async () => {
+    await endSession();
+  };
+
   // Show loading screen while checking session
   if (authLoading || isSessionLoading) {
     return (
@@ -189,7 +209,7 @@ export default function App() {
   // Render Dashboard
   if (!currentProfile) return null;
 
-  const tabs: TabType[] = ['overview', 'targets', 'goals', 'analytics', 'settings'];
+  const tabs: TabType[] = ['overview', 'targets', 'goals', 'analytics', 'games', 'settings'];
 
   return (
     <div className="min-h-screen bg-slate-50 pb-24 md:pb-0 font-sans">
@@ -213,7 +233,7 @@ export default function App() {
                   : 'text-slate-500 hover:text-slate-700'
               }`}
             >
-              {tab === 'goals' ? '🎯 Goals' : tab === 'targets' ? '📅 Targets' : tab}
+              {tab === 'goals' ? '🎯 Goals' : tab === 'targets' ? '📅 Targets' : tab === 'games' ? '🎮 Games' : tab}
             </button>
           ))}
         </div>
@@ -266,6 +286,18 @@ export default function App() {
           />
         )}
 
+        {activeTab === 'games' && currentProfileId && (
+          <MiniGames
+            currentTheme={currentTheme}
+            currentProfileId={currentProfileId}
+            profiles={profiles}
+            session={gameSession}
+            onCreateSession={createSession}
+            onUpdateSession={updateGameSession}
+            onEndSession={endSession}
+          />
+        )}
+
         {activeTab === 'settings' && (
           <Settings
             currentProfile={currentProfile}
@@ -310,6 +342,33 @@ export default function App() {
         savingsTarget={target}
         cutoffPeriods={cutoffPeriods}
       />
+
+      {/* Game Invite Notification */}
+      {pendingInvite && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 animate-slide-in-from-bottom-4">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 p-4 flex items-center gap-4 max-w-sm">
+            <div className="text-3xl">{profiles[pendingInvite.initiator]?.emoji || '🎮'}</div>
+            <div className="flex-1 min-w-0">
+              <p className="font-bold text-slate-800 truncate">
+                {profiles[pendingInvite.initiator]?.name || pendingInvite.initiator} wants to play!
+              </p>
+              <p className="text-sm text-slate-500">
+                {pendingInvite.gameType === 'rps' ? '✊ Rock Paper Scissors'
+                  : pendingInvite.gameType === 'roulette' ? '🎰 Random Roulette'
+                  : '🔢 Number Generator'}
+              </p>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button onClick={handleDeclineGame} className="px-3 py-2 rounded-xl bg-slate-100 text-slate-500 font-bold text-sm hover:bg-slate-200 transition-colors">
+                Nah
+              </button>
+              <button onClick={handleAcceptGame} className={`px-3 py-2 rounded-xl text-white font-bold text-sm ${currentTheme.bgClass}`}>
+                Join!
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

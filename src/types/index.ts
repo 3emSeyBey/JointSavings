@@ -82,5 +82,5 @@ export interface CutoffPeriod {
 }
 
 export type ViewType = 'login' | 'dashboard';
-export type TabType = 'overview' | 'analytics' | 'goals' | 'targets' | 'settings';
+export type TabType = 'overview' | 'analytics' | 'goals' | 'targets' | 'games' | 'settings';
 

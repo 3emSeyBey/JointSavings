@@ -9,4 +9,5 @@ export { Analytics } from './Analytics';
 export { AIChat } from './AIChat';
 export { ParticlesBackground } from './ParticlesBackground';
 export { SavingsTargets } from './SavingsTargets';
+export { MiniGames } from './MiniGames';
 

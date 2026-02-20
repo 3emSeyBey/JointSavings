@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { 
-  Target, Calendar, AlertTriangle, Clock, CheckCircle, 
-  Settings2, X, TrendingUp, AlertCircle, ChevronDown, ChevronUp
+import {
+  Target, Calendar, AlertTriangle, Clock,
+  Settings2, X, AlertCircle
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 import { THEMES } from '@/lib/constants';
@@ -41,7 +41,6 @@ export function SavingsTargets({
   currentTheme,
   onSetTarget,
   onToggleTarget,
-  onClosePeriod,
 }: SavingsTargetsProps) {
   const [showSetupModal, setShowSetupModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
