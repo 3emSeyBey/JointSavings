@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { PiggyBank, Lock, LogIn } from 'lucide-react';
+import { PiggyBank, Lock, ShieldCheck, LogIn } from 'lucide-react';
 import { THEMES } from '@/lib/constants';
 import { ParticlesBackground } from './ParticlesBackground';
 import type { Profile } from '@/types';

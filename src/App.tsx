@@ -32,7 +32,8 @@ export default function App() {
     cutoffPeriods, 
     totalOwed,
     setTargetSettings, 
-    toggleTarget
+    toggleTarget, 
+    closePeriod 
   } = useSavingsTarget(!!user, transactions);
 
   // View & Navigation State
@@ -241,6 +242,7 @@ export default function App() {
             currentTheme={currentTheme}
             onSetTarget={setTargetSettings}
             onToggleTarget={toggleTarget}
+            onClosePeriod={closePeriod}
           />
         )}
 

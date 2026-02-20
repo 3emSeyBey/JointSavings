@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
-import Particles, { initParticlesEngine } from '@tsparticles/react';
+import { useCallback } from 'react';
+import Particles from '@tsparticles/react';
 import { loadSlim } from '@tsparticles/slim';
+import type { Engine } from '@tsparticles/engine';
 
 interface ParticlesBackgroundProps {
   color?: string;
@@ -8,21 +9,14 @@ interface ParticlesBackgroundProps {
 }
 
 export function ParticlesBackground({ color = '#ffffff', className = '' }: ParticlesBackgroundProps) {
-  const [init, setInit] = useState(false);
-
-  useEffect(() => {
-    initParticlesEngine(async (engine) => {
-      await loadSlim(engine);
-    }).then(() => {
-      setInit(true);
-    });
+  const particlesInit = useCallback(async (engine: Engine) => {
+    await loadSlim(engine);
   }, []);
-
-  if (!init) return null;
 
   return (
     <Particles
       className={`absolute inset-0 ${className}`}
+      init={particlesInit}
       options={{
         fullScreen: false,
         background: {
