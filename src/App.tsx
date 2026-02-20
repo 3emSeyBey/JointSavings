@@ -355,7 +355,8 @@ export default function App() {
               <p className="text-sm text-slate-500">
                 {pendingInvite.gameType === 'rps' ? '✊ Rock Paper Scissors'
                   : pendingInvite.gameType === 'roulette' ? '🎰 Random Roulette'
-                  : '🔢 Number Generator'}
+                  : pendingInvite.gameType === 'rng' ? '🔢 Number Generator'
+                  : '🤔 Decide For Me'}
               </p>
             </div>
             <div className="flex gap-2 shrink-0">

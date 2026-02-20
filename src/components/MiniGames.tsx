@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
-import { Gamepad2, Swords, Dices, Hash, X, Plus, RotateCcw } from 'lucide-react';
+import { Gamepad2, Swords, Dices, Hash, X, Plus, RotateCcw, Sparkles, Send } from 'lucide-react';
+import { callGemini } from '@/lib/utils';
+import { GEMINI_API_KEY } from '@/config/firebase';
 import type { Theme, Profile } from '@/types';
 import type { GameSession } from '@/hooks/useGameSession';
 
@@ -9,6 +11,7 @@ const GAMES = [
   { id: 'rps' as const, title: 'Rock Paper Scissors', description: 'Settle it together!', icon: Swords, emoji: '✊' },
   { id: 'roulette' as const, title: 'Random Roulette', description: 'Spin to decide anything', icon: Dices, emoji: '🎰' },
   { id: 'rng' as const, title: 'Number Generator', description: 'Pick a random number', icon: Hash, emoji: '🔢' },
+  { id: 'decide' as const, title: 'Decide For Me', description: 'AI helps you decide', icon: Sparkles, emoji: '🤔' },
 ];
 
 const RPS_CHOICES: { id: RPSChoice; emoji: string; label: string }[] = [
@@ -337,6 +340,246 @@ function RNGGame({ session, currentTheme, onUpdate }: SubGameProps) {
   );
 }
 
+// ─── Decide For Me (AI) ─────────────────────────────────────────────────────────
+
+async function callGeminiForDecide(
+  type: 'random' | 'think_question' | 'think_conclude',
+  question: string,
+  options: string[],
+  chat: Array<{ role: string; text: string }>
+): Promise<string> {
+  const optionsStr = options.join(', ');
+  let systemPrompt: string;
+  let prompt: string;
+
+  if (type === 'random') {
+    systemPrompt = 'You are a fun, spontaneous decision maker. Never over-explain. No bullet points. No caveats. No mentioning randomness or AI.';
+    prompt = `"${question}"\nChoices: ${optionsStr}\n\nPick one. Give a fun, confident one-sentence answer that sounds like a friend making the call.`;
+  } else {
+    const chatStr = chat.map(m => `${m.role === 'ai' ? 'You' : 'User'}: ${m.text}`).join('\n');
+    systemPrompt = 'You are a direct, no-nonsense decision helper. Never over-explain. No bullet points. No preambles like "Based on" or "Considering". No caveats or alternatives. Be a decisive friend who just tells it straight.';
+
+    if (type === 'think_question') {
+      prompt = `Dilemma: "${question}"\nChoices: ${optionsStr}\n${chatStr ? `\nSo far:\n${chatStr}\n` : ''}\nAsk ONE short question (max 8 words) to help narrow it down. Just the question, nothing else.`;
+    } else {
+      prompt = `Dilemma: "${question}"\nChoices: ${optionsStr}\n\nConversation:\n${chatStr}\n\nGive your final answer in ONE sentence. Pick one specific option from the choices. Be decisive, confident, and say something the user wants to hear.`;
+    }
+  }
+
+  console.log('[DecideForMe] Calling Gemini', { type, hasApiKey: !!GEMINI_API_KEY, apiKeyPrefix: GEMINI_API_KEY?.slice(0, 8) + '...' });
+  console.log('[DecideForMe] System prompt:', systemPrompt);
+  console.log('[DecideForMe] User prompt:', prompt);
+
+  try {
+    const response = await callGemini(prompt, GEMINI_API_KEY, systemPrompt);
+    console.log('[DecideForMe] Gemini response:', response);
+    return response?.trim() || 'Go with your gut!';
+  } catch (err) {
+    console.error('[DecideForMe] Gemini call FAILED:', err);
+    throw err;
+  }
+}
+
+function DecideGame({ session, currentTheme, onUpdate }: SubGameProps) {
+  const [question, setQuestion] = useState('');
+  const [options, setOptions] = useState<string[]>([]);
+  const [newOption, setNewOption] = useState('');
+  const [mode, setMode] = useState<'think' | 'random'>('think');
+  const [userInput, setUserInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const chat = (session.decideChat || []) as Array<{ role: string; text: string }>;
+  const isSetup = !session.decideQuestion;
+  const isDone = !!session.decideResult;
+  const aiCount = chat.filter(m => m.role === 'ai').length;
+  const isWaitingForUser = !isDone && !session.decideLoading && chat.length > 0 && chat[chat.length - 1].role === 'ai' && session.decideMode === 'think';
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chat.length]);
+
+  const addOption = () => {
+    const t = newOption.trim();
+    if (t && !options.includes(t)) { setOptions([...options, t]); setNewOption(''); }
+  };
+
+  const handleStart = async () => {
+    if (!question.trim() || options.length < 2 || loading) return;
+    console.log('[DecideForMe] handleStart fired', { question, options, mode });
+    setLoading(true);
+    const q = question.trim();
+    const opts = [...options];
+    const m = mode;
+
+    console.log('[DecideForMe] Writing setup to Firestore...');
+    await onUpdate({ decideQuestion: q, decideOptions: opts, decideMode: m, decideLoading: true });
+    console.log('[DecideForMe] Firestore updated, calling AI...');
+
+    try {
+      const response = await callGeminiForDecide(m === 'random' ? 'random' : 'think_question', q, opts, []);
+      console.log('[DecideForMe] AI responded, writing result to Firestore...');
+      const updates: Record<string, unknown> = { decideChat: [{ role: 'ai', text: response }], decideLoading: false };
+      if (m === 'random') updates.decideResult = response;
+      await onUpdate(updates);
+      console.log('[DecideForMe] Done!');
+    } catch (err) {
+      console.error('[DecideForMe] handleStart error:', err);
+      await onUpdate({ decideLoading: false });
+    }
+    setLoading(false);
+  };
+
+  const handleAnswer = async () => {
+    const answer = userInput.trim();
+    if (!answer || loading) return;
+    console.log('[DecideForMe] handleAnswer fired', { answer, aiCount });
+    setUserInput('');
+    setLoading(true);
+
+    const newChat = [...chat, { role: 'user', text: answer }];
+    await onUpdate({ decideChat: newChat, decideLoading: true });
+
+    try {
+      const type = aiCount >= 3 ? 'think_conclude' : 'think_question';
+      console.log('[DecideForMe] Next AI call type:', type);
+      const response = await callGeminiForDecide(type, session.decideQuestion, session.decideOptions, newChat);
+      const finalChat = [...newChat, { role: 'ai', text: response }];
+      const updates: Record<string, unknown> = { decideChat: finalChat, decideLoading: false };
+      if (type === 'think_conclude') updates.decideResult = response;
+      await onUpdate(updates);
+      console.log('[DecideForMe] Answer round done!');
+    } catch (err) {
+      console.error('[DecideForMe] handleAnswer error:', err);
+      await onUpdate({ decideLoading: false });
+    }
+    setLoading(false);
+  };
+
+  const handleReset = async () => {
+    setQuestion(''); setOptions([]); setNewOption(''); setMode('think'); setUserInput('');
+    await onUpdate({ decideQuestion: '', decideOptions: [], decideMode: 'think', decideChat: [], decideResult: null, decideLoading: false });
+  };
+
+  // ── Setup phase ──
+  if (isSetup) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <label className="text-xs font-bold text-slate-400 uppercase block mb-2">What do you need to decide?</label>
+          <input type="text" placeholder="e.g., Where to eat tonight?" value={question}
+            onChange={e => setQuestion(e.target.value)}
+            className="w-full bg-slate-50 rounded-xl p-3 font-medium outline-none focus:ring-2 focus:ring-slate-200" />
+        </div>
+        <div>
+          <label className="text-xs font-bold text-slate-400 uppercase block mb-2">Options</label>
+          <div className="flex gap-2">
+            <input type="text" placeholder="Add an option..." value={newOption}
+              onChange={e => setNewOption(e.target.value)} onKeyDown={e => e.key === 'Enter' && addOption()}
+              className="flex-1 bg-slate-50 rounded-xl p-3 font-medium outline-none focus:ring-2 focus:ring-slate-200" />
+            <button onClick={addOption} className={`px-4 rounded-xl text-white font-bold ${currentTheme.bgClass}`}>
+              <Plus size={20} />
+            </button>
+          </div>
+          {options.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-3">
+              {options.map((opt, i) => (
+                <div key={i} className="flex items-center gap-1 px-3 py-1.5 bg-slate-100 rounded-lg text-sm font-medium text-slate-700">
+                  {opt}
+                  <button onClick={() => setOptions(options.filter((_, idx) => idx !== i))} className="text-slate-300 hover:text-rose-500 transition-colors">
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div>
+          <label className="text-xs font-bold text-slate-400 uppercase block mb-2">Decision Mode</label>
+          <div className="flex gap-2">
+            <button onClick={() => setMode('think')}
+              className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${mode === 'think' ? `${currentTheme.bgClass} text-white shadow-lg` : 'bg-slate-100 text-slate-500'}`}>
+              🧠 Think Through
+            </button>
+            <button onClick={() => setMode('random')}
+              className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${mode === 'random' ? `${currentTheme.bgClass} text-white shadow-lg` : 'bg-slate-100 text-slate-500'}`}>
+              🎲 Pick Randomly
+            </button>
+          </div>
+        </div>
+        <button onClick={handleStart} disabled={!question.trim() || options.length < 2 || loading}
+          className={`w-full py-4 rounded-xl font-bold text-white text-lg shadow-lg active:scale-95 transition-transform disabled:opacity-40 disabled:cursor-not-allowed ${currentTheme.bgClass}`}>
+          {loading ? '✨ Thinking...' : '✨ Decide!'}
+        </button>
+      </div>
+    );
+  }
+
+  // ── Conversation / Result phase ──
+  return (
+    <div className="space-y-4">
+      <div className="bg-slate-50 rounded-xl p-3">
+        <p className="text-sm font-bold text-slate-700">&ldquo;{session.decideQuestion}&rdquo;</p>
+        <p className="text-xs text-slate-400 mt-1">{(session.decideOptions || []).join(' · ')}</p>
+        {session.decideMode === 'think' && !isDone && (
+          <p className="text-xs text-slate-300 mt-1">Question {Math.min(aiCount, 3)} of 3</p>
+        )}
+      </div>
+
+      <div className="space-y-3 max-h-[280px] overflow-y-auto">
+        {chat.map((msg, i) => (
+          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl text-sm ${
+              msg.role === 'ai'
+                ? 'bg-slate-100 text-slate-800 rounded-bl-md'
+                : `${currentTheme.bgClass} text-white rounded-br-md`
+            }`}>
+              {msg.text}
+            </div>
+          </div>
+        ))}
+        {session.decideLoading && (
+          <div className="flex justify-start">
+            <div className="bg-slate-100 px-4 py-3 rounded-2xl rounded-bl-md flex gap-1">
+              <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" />
+              <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+              <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+            </div>
+          </div>
+        )}
+        <div ref={chatEndRef} />
+      </div>
+
+      {isDone && (
+        <div className="text-center space-y-4 pt-2 animate-slide-in-from-bottom-4">
+          <div className={`inline-block px-5 py-3 rounded-2xl font-bold ${currentTheme.lightBg} ${currentTheme.textClass}`}>
+            🎯 {session.decideResult}
+          </div>
+          <div>
+            <button onClick={handleReset} className="px-6 py-2.5 rounded-xl font-bold text-sm text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors">
+              Ask something else
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isWaitingForUser && !isDone && (
+        <div className="flex gap-2">
+          <input type="text" placeholder="Your answer..." value={userInput}
+            onChange={e => setUserInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleAnswer()}
+            className="flex-1 bg-slate-50 rounded-xl p-3 text-sm font-medium outline-none focus:ring-2 focus:ring-slate-200"
+            autoFocus />
+          <button onClick={handleAnswer} disabled={!userInput.trim() || loading}
+            className={`px-4 rounded-xl text-white font-bold disabled:opacity-40 ${currentTheme.bgClass}`}>
+            <Send size={18} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main MiniGames Component ───────────────────────────────────────────────────
 
 interface MiniGamesProps {
@@ -344,7 +587,7 @@ interface MiniGamesProps {
   currentProfileId: string;
   profiles: Record<string, Profile>;
   session: GameSession | null;
-  onCreateSession: (gameType: 'rps' | 'roulette' | 'rng') => Promise<void>;
+  onCreateSession: (gameType: 'rps' | 'roulette' | 'rng' | 'decide') => Promise<void>;
   onUpdateSession: (updates: Record<string, unknown>) => Promise<void>;
   onEndSession: () => Promise<void>;
 }
@@ -369,7 +612,7 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
         <p className="text-slate-500 text-sm">Challenge your partner across devices!</p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2">
         {GAMES.map(game => {
           const Icon = game.icon;
           const hasSession = !!session;
@@ -432,6 +675,9 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
                   )}
                   {session.gameType === 'rng' && (
                     <RNGGame session={session} currentProfileId={currentProfileId} profiles={profiles} currentTheme={currentTheme} onUpdate={onUpdateSession} />
+                  )}
+                  {session.gameType === 'decide' && (
+                    <DecideGame session={session} currentProfileId={currentProfileId} profiles={profiles} currentTheme={currentTheme} onUpdate={onUpdateSession} />
                   )}
                 </>
               )}

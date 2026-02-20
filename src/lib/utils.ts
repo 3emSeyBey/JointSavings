@@ -21,38 +21,22 @@ export function getTodayISO(): string {
 }
 
 export async function callGemini(
-  prompt: string, 
+  prompt: string,
   apiKey: string,
   systemPrompt = "You are a helpful financial assistant."
 ): Promise<string | undefined> {
-  let retries = 0;
-  const maxRetries = 5;
-  
-  while (retries <= maxRetries) {
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            systemInstruction: { parts: [{ text: systemPrompt }] }
-          })
-        }
-      );
-      
-      if (!response.ok) throw new Error('API Error');
-      
-      const data = await response.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text;
-    } catch (e) {
-      if (retries === maxRetries) throw e;
-      const delay = Math.pow(2, retries) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
-      retries++;
-    }
-  }
+  const { GoogleGenAI } = await import('@google/genai');
+  const ai = new GoogleGenAI({ apiKey });
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash-lite',
+    contents: prompt,
+    config: {
+      systemInstruction: systemPrompt,
+    },
+  });
+
+  return response.text;
 }
 
 export function cn(...classes: (string | boolean | undefined)[]): string {

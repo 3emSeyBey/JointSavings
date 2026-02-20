@@ -4,7 +4,7 @@ import { db, APP_ID } from '@/config/firebase';
 
 export interface GameSession {
   id: string;
-  gameType: 'rps' | 'roulette' | 'rng';
+  gameType: 'rps' | 'roulette' | 'rng' | 'decide';
   status: 'pending' | 'active' | 'finished';
   initiator: string;
   createdAt: string;
@@ -23,6 +23,13 @@ export interface GameSession {
   rngMax: number;
   rngResult: number | null;
   rngRollTs: number | null;
+  // Decide
+  decideQuestion: string;
+  decideOptions: string[];
+  decideMode: 'think' | 'random';
+  decideChat: Array<{ role: string; text: string }>;
+  decideResult: string | null;
+  decideLoading: boolean;
 }
 
 const getSessionDoc = () => doc(db, 'artifacts', APP_ID, 'public', 'data', 'gameSessions', 'active');
@@ -61,6 +68,12 @@ export function useGameSession(isAuthenticated: boolean, currentProfileId: strin
       rngMax: 100,
       rngResult: null,
       rngRollTs: null,
+      decideQuestion: '',
+      decideOptions: [],
+      decideMode: 'think',
+      decideChat: [],
+      decideResult: null,
+      decideLoading: false,
     });
   };
 
