@@ -3,14 +3,22 @@ import { PiggyBank, Lock, LogIn } from 'lucide-react';
 import { THEMES } from '@/lib/constants';
 import { ParticlesBackground } from './ParticlesBackground';
 import type { Profile } from '@/types';
+import { profileHasPin } from '@/lib/profilePin';
+import { canUseServerPin, verifyServerPin } from '@/lib/pinClient';
 
 interface LoginViewProps {
   profiles: Record<string, Profile>;
   onProfileSelect: (profileId: string) => void;
   pendingSessionProfileId?: string | null;
+  onSignInWithGoogle?: () => void | Promise<void>;
 }
 
-export function LoginView({ profiles, onProfileSelect, pendingSessionProfileId }: LoginViewProps) {
+export function LoginView({
+  profiles,
+  onProfileSelect,
+  pendingSessionProfileId,
+  onSignInWithGoogle,
+}: LoginViewProps) {
   const [showPinModal, setShowPinModal] = useState(false);
   const [pinAttempt, setPinAttempt] = useState('');
   const [pendingProfileId, setPendingProfileId] = useState<string | null>(null);
@@ -20,7 +28,7 @@ export function LoginView({ profiles, onProfileSelect, pendingSessionProfileId }
   useEffect(() => {
     if (pendingSessionProfileId && profiles[pendingSessionProfileId]) {
       const profile = profiles[pendingSessionProfileId];
-      if (profile.pin && profile.pin.trim() !== '') {
+      if (profileHasPin(profile)) {
         setPendingProfileId(pendingSessionProfileId);
         setShowPinModal(true);
         setPinAttempt('');
@@ -30,7 +38,7 @@ export function LoginView({ profiles, onProfileSelect, pendingSessionProfileId }
 
   const handleProfileClick = (profileId: string) => {
     const profile = profiles[profileId];
-    if (profile?.pin && profile.pin.trim() !== '') {
+    if (profile && profileHasPin(profile)) {
       setPendingProfileId(profileId);
       setShowPinModal(true);
       setPinAttempt('');
@@ -40,10 +48,22 @@ export function LoginView({ profiles, onProfileSelect, pendingSessionProfileId }
     }
   };
 
-  const verifyPin = () => {
+  const verifyPin = async () => {
     if (!pendingProfileId) return;
-    
-    if (pinAttempt === profiles[pendingProfileId].pin) {
+
+    const profile = profiles[pendingProfileId];
+    let ok = false;
+    if (canUseServerPin()) {
+      try {
+        ok = await verifyServerPin(pendingProfileId, pinAttempt);
+      } catch {
+        ok = false;
+      }
+    } else if (profile?.pin != null) {
+      ok = pinAttempt === profile.pin;
+    }
+
+    if (ok) {
       onProfileSelect(pendingProfileId);
       setShowPinModal(false);
       setPinAttempt('');
@@ -60,7 +80,7 @@ export function LoginView({ profiles, onProfileSelect, pendingSessionProfileId }
   const isRestoringSession = pendingSessionProfileId === pendingProfileId;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-6 relative overflow-hidden">
+    <div className="min-h-dvh bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4 sm:p-6 relative overflow-y-auto safe-area-pt safe-area-pb safe-area-px">
       {/* Particles Background */}
       <ParticlesBackground color="#ec4899" />
       
@@ -108,7 +128,7 @@ export function LoginView({ profiles, onProfileSelect, pendingSessionProfileId }
                   <span className={`text-xl font-bold ${theme.textClass}`}>
                     {profile.name}
                   </span>
-                  {profile.pin && profile.pin.trim() !== '' && (
+                  {profileHasPin(profile) && (
                     <div className="absolute top-3 left-3 text-slate-500">
                       <Lock size={14} />
                     </div>
@@ -117,6 +137,19 @@ export function LoginView({ profiles, onProfileSelect, pendingSessionProfileId }
               );
             })}
           </div>
+
+          {onSignInWithGoogle && (
+            <div className="mt-8 pt-6 border-t border-white/10">
+              <p className="text-slate-500 text-xs mb-3">Use a shared account</p>
+              <button
+                type="button"
+                onClick={() => void onSignInWithGoogle()}
+                className="w-full py-3 rounded-xl font-bold text-sm bg-white text-slate-800 hover:bg-slate-100 transition-colors"
+              >
+                Continue with Google
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

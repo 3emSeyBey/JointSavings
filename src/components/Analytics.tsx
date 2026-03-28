@@ -16,9 +16,11 @@ import {
   Bar,
   Legend
 } from 'recharts';
-import { TrendingUp, PieChart as PieIcon, Calendar, Users } from 'lucide-react';
+import { TrendingUp, PieChart as PieIcon, Calendar, Users, Download } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 import { THEMES } from '@/lib/constants';
+import { projectBalanceLinear } from '@/lib/forecast';
+import { longestStreakFromSortedDates } from '@/lib/streaks';
 import type { Transaction, Profile, Theme } from '@/types';
 
 interface AnalyticsProps {
@@ -36,34 +38,46 @@ export function Analytics({
   totalSavings,
   userTotals 
 }: AnalyticsProps) {
-  // Monthly data for line chart
+  const memberIds = useMemo(() => {
+    const ids = new Set<string>(Object.keys(profiles));
+    transactions.forEach((tx) => ids.add(tx.userId));
+    return [...ids].sort();
+  }, [profiles, transactions]);
+
+  // Monthly data for line chart (dynamic member keys)
   const monthlyData = useMemo(() => {
-    const grouped: Record<string, { month: string; total: number; pea: number; cam: number }> = {};
-    
-    transactions.forEach(tx => {
-      const date = new Date(tx.date);
+    type Row = Record<string, string | number>;
+    const grouped: Record<string, Row> = {};
+
+    transactions.forEach((tx) => {
+      const date = new Date(`${tx.date}T12:00:00`);
       const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
       const monthLabel = date.toLocaleString('default', { month: 'short', year: '2-digit' });
-      
+
       if (!grouped[monthKey]) {
-        grouped[monthKey] = { month: monthLabel, total: 0, pea: 0, cam: 0 };
+        const row: Row = { month: monthLabel, total: 0 };
+        memberIds.forEach((id) => {
+          row[id] = 0;
+        });
+        grouped[monthKey] = row;
       }
-      
-      grouped[monthKey].total += tx.amount;
-      if (tx.userId === 'pea') grouped[monthKey].pea += tx.amount;
-      if (tx.userId === 'cam') grouped[monthKey].cam += tx.amount;
+
+      grouped[monthKey].total = Number(grouped[monthKey].total) + tx.amount;
+      const uid = tx.userId;
+      const prev = Number(grouped[monthKey][uid] ?? 0);
+      grouped[monthKey][uid] = prev + tx.amount;
     });
-    
+
     return Object.entries(grouped)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([, data]) => data);
-  }, [transactions]);
+  }, [transactions, memberIds]);
 
   // Cumulative data for area chart
   const cumulativeData = useMemo(() => {
     let runningTotal = 0;
-    return monthlyData.map(item => {
-      runningTotal += item.total;
+    return monthlyData.map((item) => {
+      runningTotal += Number(item.total);
       return { ...item, cumulative: runningTotal };
     });
   }, [monthlyData]);
@@ -99,10 +113,53 @@ export function Analytics({
     return totalSavings / monthlyData.length;
   }, [monthlyData, totalSavings]);
 
-  const contributionRatio = useMemo(() => {
-    const peaPct = totalSavings > 0 ? ((userTotals.pea || 0) / totalSavings) * 100 : 50;
-    return { pea: peaPct, cam: 100 - peaPct };
-  }, [userTotals, totalSavings]);
+  const shareByMember = useMemo(() => {
+    return memberIds.map((id) => ({
+      id,
+      name: profiles[id]?.name || id,
+      theme: profiles[id]?.theme || 'emerald',
+      pct: totalSavings > 0 ? ((userTotals[id] || 0) / totalSavings) * 100 : 100 / Math.max(memberIds.length, 1),
+    }));
+  }, [memberIds, profiles, userTotals, totalSavings]);
+
+  const categoryTotals = useMemo(() => {
+    const m: Record<string, number> = {};
+    transactions.forEach((tx) => {
+      const c = tx.category || 'general';
+      m[c] = (m[c] || 0) + tx.amount;
+    });
+    return Object.entries(m)
+      .map(([category, amount]) => ({ category, amount }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [transactions]);
+
+  const savingsStreakDays = useMemo(() => {
+    const dates = [...new Set(transactions.map((t) => t.date))].sort();
+    return longestStreakFromSortedDates(dates);
+  }, [transactions]);
+
+  const forecast3mo = useMemo(
+    () => projectBalanceLinear(totalSavings, avgMonthly, 3),
+    [totalSavings, avgMonthly]
+  );
+
+  const exportCsv = () => {
+    const header = 'date,amount,type,userId,spendSource,category,note\n';
+    const rows = transactions
+      .map((t) => {
+        const type = t.entryKind === 'spend' ? 'spend' : 'saving';
+        const src = t.spendSource ?? '';
+        return `${t.date},${t.amount},${type},${t.userId},${src},${t.category || 'general'},"${(t.note || '').replace(/"/g, '""')}"`;
+      })
+      .join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `joint-savings-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   if (transactions.length === 0) {
     return (
@@ -118,8 +175,19 @@ export function Analytics({
 
   return (
     <div className="space-y-6">
+      <div className="flex justify-stretch sm:justify-end">
+        <button
+          type="button"
+          onClick={exportCsv}
+          className={`inline-flex items-center justify-center gap-2 w-full sm:w-auto min-h-11 px-4 py-2.5 rounded-xl text-sm font-bold text-white ${currentTheme.bgClass}`}
+        >
+          <Download size={16} />
+          Export CSV
+        </button>
+      </div>
+
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         <StatCard
           icon={<TrendingUp size={20} />}
           label="Total Saved"
@@ -132,18 +200,44 @@ export function Analytics({
           value={formatCurrency(avgMonthly)}
           color="bg-violet-500"
         />
+      </div>
+
+      <div className="grid sm:grid-cols-3 gap-4">
         <StatCard
-          icon={<Users size={20} />}
-          label={`${profiles.pea?.name || 'Pea'}'s Share`}
-          value={`${contributionRatio.pea.toFixed(0)}%`}
-          color={THEMES[profiles.pea?.theme || 'emerald'].bgClass}
+          icon={<TrendingUp size={20} />}
+          label="3-mo projection"
+          value={formatCurrency(forecast3mo)}
+          color="bg-sky-500"
         />
         <StatCard
-          icon={<Users size={20} />}
-          label={`${profiles.cam?.name || 'Cam'}'s Share`}
-          value={`${contributionRatio.cam.toFixed(0)}%`}
-          color={THEMES[profiles.cam?.theme || 'indigo'].bgClass}
+          icon={<Calendar size={20} />}
+          label="Best savings streak"
+          value={`${savingsStreakDays} days`}
+          color="bg-amber-500"
         />
+        <div className="bg-white rounded-2xl border border-slate-100 p-4 shadow-sm sm:col-span-1">
+          <p className="text-xs text-slate-400 font-medium uppercase mb-2">By category</p>
+          <ul className="space-y-1 text-sm">
+            {categoryTotals.slice(0, 6).map((c) => (
+              <li key={c.category} className="flex justify-between gap-2">
+                <span className="text-slate-600 capitalize">{c.category}</span>
+                <span className="font-bold text-slate-800">{formatCurrency(c.amount)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+        {shareByMember.map((m) => (
+          <StatCard
+            key={m.id}
+            icon={<Users size={20} />}
+            label={`${m.name}'s Share`}
+            value={`${m.pct.toFixed(0)}%`}
+            color={THEMES[m.theme].bgClass}
+          />
+        ))}
       </div>
 
       {/* Growth Chart */}
@@ -242,18 +336,15 @@ export function Analytics({
                   formatter={(value: number) => formatCurrency(value)}
                 />
                 <Legend />
-                <Bar 
-                  dataKey="pea" 
-                  name={profiles.pea?.name || 'Pea'} 
-                  fill={THEMES[profiles.pea?.theme || 'emerald'].color} 
-                  radius={[4, 4, 0, 0]} 
-                />
-                <Bar 
-                  dataKey="cam" 
-                  name={profiles.cam?.name || 'Cam'} 
-                  fill={THEMES[profiles.cam?.theme || 'indigo'].color} 
-                  radius={[4, 4, 0, 0]} 
-                />
+                {memberIds.map((id) => (
+                  <Bar
+                    key={id}
+                    dataKey={id}
+                    name={profiles[id]?.name || id}
+                    fill={THEMES[profiles[id]?.theme || 'emerald'].color}
+                    radius={[4, 4, 0, 0]}
+                  />
+                ))}
               </BarChart>
             </ResponsiveContainer>
           </div>

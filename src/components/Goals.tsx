@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Target, Plus, X, Trash2, TrendingUp, Calendar, Sparkles } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 import type { Goal, NewGoal, Theme } from '@/types';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 const GOAL_EMOJIS = ['🎯', '🏠', '✈️', '🚗', '💍', '🎓', '💻', '🏖️', '👶', '💰'];
 
@@ -23,6 +24,7 @@ export function Goals({ goals, currentTheme, onAddGoal, onContribute, onDeleteGo
     emoji: '🎯'
   });
   const [contribution, setContribution] = useState('');
+  const [pendingDeleteGoalId, setPendingDeleteGoalId] = useState<string | null>(null);
 
   const handleAddGoal = () => {
     if (!newGoal.title || !newGoal.targetAmount) return;
@@ -39,9 +41,7 @@ export function Goals({ goals, currentTheme, onAddGoal, onContribute, onDeleteGo
   };
 
   const handleDelete = (id: string) => {
-    if (confirm('Delete this goal?')) {
-      onDeleteGoal(id);
-    }
+    setPendingDeleteGoalId(id);
   };
 
   const getProgress = (goal: Goal) => {
@@ -309,6 +309,19 @@ export function Goals({ goals, currentTheme, onAddGoal, onContribute, onDeleteGo
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={pendingDeleteGoalId != null}
+        title="Delete this goal?"
+        message="This cannot be undone. Progress saved toward this goal will be lost."
+        confirmLabel="Delete"
+        danger
+        onCancel={() => setPendingDeleteGoalId(null)}
+        onConfirm={() => {
+          if (pendingDeleteGoalId) onDeleteGoal(pendingDeleteGoalId);
+          setPendingDeleteGoalId(null);
+        }}
+      />
     </div>
   );
 }

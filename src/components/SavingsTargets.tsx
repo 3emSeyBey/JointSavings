@@ -5,31 +5,23 @@ import {
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
 import { THEMES } from '@/lib/constants';
+import { useToast } from '@/context/ToastContext';
 import type { Profile, Theme, SavingsTarget, CutoffPeriod } from '@/types';
-
-interface CurrentPeriodStats {
-  startDate: string;
-  endDate: string;
-  contributions: { pea: number; cam: number };
-  targetAmount: number;
-  daysRemaining: number;
-  totalDays: number;
-  progress: { pea: number; cam: number };
-  remaining: { pea: number; cam: number };
-  isUrgent: boolean;
-  isOverdue: boolean;
-}
+import type { CurrentPeriodStats } from '@/hooks/useSavingsTarget';
 
 interface SavingsTargetsProps {
   target: SavingsTarget | null;
   currentPeriodStats: CurrentPeriodStats | null;
   cutoffPeriods: CutoffPeriod[];
-  totalOwed: { pea: number; cam: number };
+  totalOwed: Record<string, number>;
   profiles: Record<string, Profile>;
+  currentProfileId: string;
   currentTheme: Theme;
   onSetTarget: (amount: number, cutoffDays: number[]) => Promise<void>;
   onToggleTarget: (isActive: boolean) => Promise<void>;
   onClosePeriod: () => Promise<void>;
+  onPayOwed: (periodId: string, userId: string, amount: number) => Promise<void>;
+  onReopenPeriod: (periodId: string) => Promise<void>;
 }
 
 export function SavingsTargets({
@@ -38,12 +30,23 @@ export function SavingsTargets({
   cutoffPeriods,
   totalOwed,
   profiles,
+  currentProfileId,
   currentTheme,
   onSetTarget,
   onToggleTarget,
+  onClosePeriod,
+  onPayOwed,
+  onReopenPeriod,
 }: SavingsTargetsProps) {
+  const { showToast } = useToast();
   const [showSetupModal, setShowSetupModal] = useState(false);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [payModal, setPayModal] = useState<{
+    periodId: string;
+    memberId: string;
+    maxOwed: number;
+  } | null>(null);
+  const [payAmountStr, setPayAmountStr] = useState('');
   const [targetAmount, setTargetAmount] = useState(target?.targetAmount?.toString() || '5000');
   const [cutoffDay1, setCutoffDay1] = useState('15');
   const [cutoffDay2, setCutoffDay2] = useState('0'); // 0 = last day
@@ -57,15 +60,16 @@ export function SavingsTargets({
       const day2 = Number(cutoffDay2);
       
       if (amount <= 0) {
-        alert('Please enter a valid target amount');
+        showToast('Please enter a valid target amount', 'error');
         return;
       }
-      
+
       await onSetTarget(amount, [day1, day2]);
       setShowSetupModal(false);
+      showToast('Target saved', 'success');
     } catch (error) {
       console.error('Error saving target:', error);
-      alert('Failed to save target');
+      showToast('Failed to save target', 'error');
     } finally {
       setIsSaving(false);
     }
@@ -76,8 +80,9 @@ export function SavingsTargets({
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
-  const peaTheme = THEMES[profiles.pea?.theme || 'pink'];
-  const camTheme = THEMES[profiles.cam?.theme || 'green'];
+  const memberIds = Object.keys(profiles).sort();
+  const themeFor = (id: string) => THEMES[profiles[id]?.theme || 'emerald'];
+  const hasOutstandingOwed = Object.values(totalOwed).some((v) => v > 0);
 
   // No target set
   if (!target) {
@@ -249,95 +254,77 @@ export function SavingsTargets({
 
           {/* Progress Bars */}
           <div className="space-y-4">
-            {/* Pea's Progress */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-lg">{profiles.pea?.emoji || '🌸'}</span>
-                  <span className={`font-bold text-sm ${currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'text-slate-700' : ''}`}>
-                    {profiles.pea?.name || 'Pea'}
-                  </span>
+            {memberIds.map((mid) => {
+              const th = themeFor(mid);
+              const contrib = currentPeriodStats.contributions[mid] ?? 0;
+              const rem = currentPeriodStats.remaining[mid] ?? 0;
+              const prog = currentPeriodStats.progress[mid] ?? 0;
+              return (
+                <div key={mid}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{profiles[mid]?.emoji || '👤'}</span>
+                      <span className={`font-bold text-sm ${currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'text-slate-700' : ''}`}>
+                        {profiles[mid]?.name || mid}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className={`font-bold ${th.textClass}`}>{formatCurrency(contrib)}</span>
+                      {rem > 0 && (
+                        <span className={`text-xs ml-2 ${currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'text-slate-500' : 'text-slate-400'}`}>
+                          ({formatCurrency(rem)} to go)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div
+                    className={`h-3 rounded-full overflow-hidden ${
+                      currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'bg-slate-200' : 'bg-white/10'
+                    }`}
+                  >
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${th.bgClass}`}
+                      style={{ width: `${prog}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="text-right">
-                  <span className={`font-bold ${peaTheme.textClass}`}>
-                    {formatCurrency(currentPeriodStats.contributions.pea)}
-                  </span>
-                  {currentPeriodStats.remaining.pea > 0 && (
-                    <span className={`text-xs ml-2 ${currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'text-slate-500' : 'text-slate-400'}`}>
-                      ({formatCurrency(currentPeriodStats.remaining.pea)} to go)
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className={`h-3 rounded-full overflow-hidden ${
-                currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'bg-slate-200' : 'bg-white/10'
-              }`}>
-                <div
-                  className={`h-full rounded-full transition-all duration-500 ${peaTheme.bgClass}`}
-                  style={{ width: `${currentPeriodStats.progress.pea}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Cam's Progress */}
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-lg">{profiles.cam?.emoji || '📸'}</span>
-                  <span className={`font-bold text-sm ${currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'text-slate-700' : ''}`}>
-                    {profiles.cam?.name || 'Cam'}
-                  </span>
-                </div>
-                <div className="text-right">
-                  <span className={`font-bold ${camTheme.textClass}`}>
-                    {formatCurrency(currentPeriodStats.contributions.cam)}
-                  </span>
-                  {currentPeriodStats.remaining.cam > 0 && (
-                    <span className={`text-xs ml-2 ${currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'text-slate-500' : 'text-slate-400'}`}>
-                      ({formatCurrency(currentPeriodStats.remaining.cam)} to go)
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div className={`h-3 rounded-full overflow-hidden ${
-                currentPeriodStats.isOverdue || currentPeriodStats.isUrgent ? 'bg-slate-200' : 'bg-white/10'
-              }`}>
-                <div
-                  className={`h-full rounded-full transition-all duration-500 ${camTheme.bgClass}`}
-                  style={{ width: `${currentPeriodStats.progress.cam}%` }}
-                />
-              </div>
-            </div>
+              );
+            })}
           </div>
+
+          <button
+            type="button"
+            onClick={() => onClosePeriod()}
+            className={`mt-4 w-full py-3 rounded-xl font-bold text-sm transition-colors ${
+              currentPeriodStats.isOverdue || currentPeriodStats.isUrgent
+                ? 'bg-slate-800 text-white hover:bg-slate-700'
+                : 'bg-white/15 text-white hover:bg-white/25'
+            }`}
+          >
+            Close period &amp; record owed
+          </button>
         </div>
       )}
 
       {/* Owed Amounts Alert */}
-      {(totalOwed.pea > 0 || totalOwed.cam > 0) && (
+      {hasOutstandingOwed && (
         <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4">
           <div className="flex items-center gap-3 mb-3">
             <AlertCircle size={20} className="text-rose-500" />
             <h4 className="font-bold text-rose-700">Outstanding Amounts</h4>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            {totalOwed.pea > 0 && (
-              <div className="bg-white rounded-xl p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <span>{profiles.pea?.emoji || '🌸'}</span>
-                  <span className="text-sm font-medium text-slate-600">{profiles.pea?.name || 'Pea'} owes</span>
+            {memberIds
+              .filter((mid) => (totalOwed[mid] || 0) > 0)
+              .map((mid) => (
+                <div key={mid} className="bg-white rounded-xl p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span>{profiles[mid]?.emoji || '👤'}</span>
+                    <span className="text-sm font-medium text-slate-600">{profiles[mid]?.name || mid} owes</span>
+                  </div>
+                  <p className={`font-bold text-lg ${themeFor(mid).textClass}`}>{formatCurrency(totalOwed[mid] || 0)}</p>
                 </div>
-                <p className={`font-bold text-lg ${peaTheme.textClass}`}>{formatCurrency(totalOwed.pea)}</p>
-              </div>
-            )}
-            {totalOwed.cam > 0 && (
-              <div className="bg-white rounded-xl p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <span>{profiles.cam?.emoji || '📸'}</span>
-                  <span className="text-sm font-medium text-slate-600">{profiles.cam?.name || 'Cam'} owes</span>
-                </div>
-                <p className={`font-bold text-lg ${camTheme.textClass}`}>{formatCurrency(totalOwed.cam)}</p>
-              </div>
-            )}
+              ))}
           </div>
         </div>
       )}
@@ -413,33 +400,108 @@ export function SavingsTargets({
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <div className="flex items-center gap-1 text-xs text-slate-500 mb-1">
-                            <span>{profiles.pea?.emoji}</span> {profiles.pea?.name || 'Pea'}
+                        {memberIds.map((mid) => (
+                          <div key={mid}>
+                            <div className="flex items-center gap-1 text-xs text-slate-500 mb-1">
+                              <span>{profiles[mid]?.emoji}</span> {profiles[mid]?.name || mid}
+                            </div>
+                            <p className={`font-bold ${themeFor(mid).textClass}`}>
+                              {formatCurrency(period.contributions?.[mid] || 0)}
+                            </p>
+                            {(period.owedAmounts?.[mid] || 0) > 0 && (
+                              <div className="mt-1 space-y-1">
+                                <p className="text-xs text-rose-500">
+                                  Owed: {formatCurrency(period.owedAmounts[mid])}
+                                </p>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const owed = period.owedAmounts?.[mid] || 0;
+                                    setPayModal({
+                                      periodId: period.id,
+                                      memberId: mid,
+                                      maxOwed: owed,
+                                    });
+                                    setPayAmountStr(String(owed));
+                                  }}
+                                  className="text-xs font-bold text-violet-600 hover:underline"
+                                >
+                                  Record payment
+                                </button>
+                              </div>
+                            )}
                           </div>
-                          <p className={`font-bold ${peaTheme.textClass}`}>
-                            {formatCurrency(period.contributions?.pea || 0)}
-                          </p>
-                          {(period.owedAmounts?.pea || 0) > 0 && (
-                            <p className="text-xs text-rose-500">Owed: {formatCurrency(period.owedAmounts.pea)}</p>
-                          )}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-1 text-xs text-slate-500 mb-1">
-                            <span>{profiles.cam?.emoji}</span> {profiles.cam?.name || 'Cam'}
-                          </div>
-                          <p className={`font-bold ${camTheme.textClass}`}>
-                            {formatCurrency(period.contributions?.cam || 0)}
-                          </p>
-                          {(period.owedAmounts?.cam || 0) > 0 && (
-                            <p className="text-xs text-rose-500">Owed: {formatCurrency(period.owedAmounts.cam)}</p>
-                          )}
-                        </div>
+                        ))}
                       </div>
+                      {period.isComplete && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await onReopenPeriod(period.id);
+                            showToast('Period reopened for edits', 'info');
+                          }}
+                          className="mt-3 text-xs font-bold text-slate-500 hover:text-slate-700"
+                        >
+                          Reopen period
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {payModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4">
+            <h3 className="font-bold text-slate-800">Record payment</h3>
+            <p className="text-sm text-slate-500">
+              Reduce owed for {profiles[payModal.memberId]?.name || payModal.memberId}
+              {payModal.memberId === currentProfileId ? ' (you)' : ''} (max {formatCurrency(payModal.maxOwed)}).
+            </p>
+            <input
+              type="number"
+              className="w-full bg-slate-50 rounded-xl p-3 font-bold"
+              value={payAmountStr}
+              onChange={(e) => setPayAmountStr(e.target.value)}
+            />
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setPayModal(null);
+                  setPayAmountStr('');
+                }}
+                className="px-4 py-2 rounded-xl font-bold text-sm bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const n = Number(payAmountStr);
+                  if (!Number.isFinite(n) || n <= 0) {
+                    showToast('Enter a valid amount', 'error');
+                    return;
+                  }
+                  const applied = Math.min(n, payModal.maxOwed);
+                  try {
+                    await onPayOwed(payModal.periodId, payModal.memberId, applied);
+                    showToast('Payment recorded', 'success');
+                    setPayModal(null);
+                    setPayAmountStr('');
+                  } catch (e) {
+                    console.error(e);
+                    showToast('Could not save payment', 'error');
+                  }
+                }}
+                className={`px-4 py-2 rounded-xl font-bold text-sm text-white ${currentTheme.bgClass}`}
+              >
+                Save
+              </button>
             </div>
           </div>
         </div>

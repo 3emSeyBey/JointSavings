@@ -1,69 +1,105 @@
 import { useState, useEffect, useMemo } from 'react';
-import { 
-  collection,
-  doc,
-  onSnapshot,
-  setDoc,
-  query,
-  orderBy
-} from 'firebase/firestore';
-import { db, APP_ID } from '@/config/firebase';
+import { onSnapshot, setDoc, query, orderBy } from 'firebase/firestore';
+import { db } from '@/config/firebase';
+import { householdDataCollection, householdDataDoc } from '@/lib/firestorePaths';
 import type { SavingsTarget, CutoffPeriod, Transaction } from '@/types';
+import { getTodayLocalISO } from '@/lib/utils';
+import { buildMemberTotals } from '@/lib/transactionTotals';
 
-// Helper to get last day of month
 function getLastDayOfMonth(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate();
 }
 
-// Helper to get current cutoff period dates
 export function getCurrentCutoffPeriod(cutoffDays: number[] = [15, 0]): { start: Date; end: Date } {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
   const day = now.getDate();
   const lastDay = getLastDayOfMonth(year, month);
-  
-  // Sort cutoff days, replacing 0 with actual last day
+
   const sortedDays = cutoffDays
-    .map(d => d === 0 ? lastDay : d)
+    .map((d) => (d === 0 ? lastDay : d))
     .sort((a, b) => a - b);
-  
+
   let startDate: Date;
   let endDate: Date;
-  
+
   if (day <= sortedDays[0]) {
-    // We're in the first period (1st to first cutoff)
     startDate = new Date(year, month, 1);
     endDate = new Date(year, month, sortedDays[0]);
   } else if (sortedDays.length > 1 && day <= sortedDays[1]) {
-    // We're in the second period
     startDate = new Date(year, month, sortedDays[0] + 1);
     endDate = new Date(year, month, sortedDays[1]);
   } else {
-    // We're after all cutoffs, so next period starts
     startDate = new Date(year, month, sortedDays[sortedDays.length - 1] + 1);
-    endDate = new Date(year, month + 1, sortedDays[0] === lastDay ? getLastDayOfMonth(year, month + 1) : sortedDays[0]);
+    endDate = new Date(
+      year,
+      month + 1,
+      sortedDays[0] === lastDay ? getLastDayOfMonth(year, month + 1) : sortedDays[0]
+    );
   }
-  
+
   return { start: startDate, end: endDate };
 }
 
-// Helper to format period ID
-function formatPeriodId(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+function formatPeriodId(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-export function useSavingsTarget(isAuthenticated: boolean, transactions: Transaction[]) {
+function normalizeCutoffPeriod(id: string, data: Record<string, unknown>): CutoffPeriod {
+  const rawC = data.contributions as Record<string, number> | undefined;
+  const rawO = data.owedAmounts as Record<string, number> | undefined;
+  const contributions: Record<string, number> = { ...rawC };
+  const owedAmounts: Record<string, number> = { ...rawO };
+  if (!rawC && data.contributions && typeof data.contributions === 'object') {
+    const legacy = data.contributions as { pea?: number; cam?: number };
+    if (legacy.pea != null) contributions.pea = legacy.pea;
+    if (legacy.cam != null) contributions.cam = legacy.cam;
+  }
+  if (!rawO && data.owedAmounts && typeof data.owedAmounts === 'object') {
+    const legacy = data.owedAmounts as { pea?: number; cam?: number };
+    if (legacy.pea != null) owedAmounts.pea = legacy.pea;
+    if (legacy.cam != null) owedAmounts.cam = legacy.cam;
+  }
+  return {
+    id,
+    startDate: String(data.startDate),
+    endDate: String(data.endDate),
+    targetAmount: Number(data.targetAmount),
+    contributions,
+    owedAmounts,
+    isComplete: Boolean(data.isComplete),
+    createdAt: String(data.createdAt ?? ''),
+  };
+}
+
+export interface CurrentPeriodStats {
+  startDate: string;
+  endDate: string;
+  contributions: Record<string, number>;
+  targetAmount: number;
+  daysRemaining: number;
+  totalDays: number;
+  progress: Record<string, number>;
+  remaining: Record<string, number>;
+  isUrgent: boolean;
+  isOverdue: boolean;
+}
+
+export function useSavingsTarget(
+  enabled: boolean,
+  transactions: Transaction[],
+  memberProfileIds: string[]
+) {
   const [target, setTarget] = useState<SavingsTarget | null>(null);
   const [cutoffPeriods, setCutoffPeriods] = useState<CutoffPeriod[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Listen to target settings
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!enabled || !db) return;
 
-    const targetRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'savingsTarget', 'current');
-    
+    const targetRef = householdDataDoc(db, 'savingsTarget', 'current');
+
     const unsubscribe = onSnapshot(targetRef, (snapshot) => {
       if (snapshot.exists()) {
         setTarget(snapshot.data() as SavingsTarget);
@@ -74,46 +110,46 @@ export function useSavingsTarget(isAuthenticated: boolean, transactions: Transac
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated]);
+  }, [enabled]);
 
-  // Listen to cutoff periods
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!enabled || !db) return;
 
-    const periodsRef = collection(db, 'artifacts', APP_ID, 'public', 'data', 'cutoffPeriods');
+    const periodsRef = householdDataCollection(db, 'cutoffPeriods');
     const periodsQuery = query(periodsRef, orderBy('endDate', 'desc'));
-    
+
     const unsubscribe = onSnapshot(periodsQuery, (snapshot) => {
-      const periods = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data()
-      })) as CutoffPeriod[];
+      const periods = snapshot.docs.map((d) =>
+        normalizeCutoffPeriod(d.id, d.data() as Record<string, unknown>)
+      );
       setCutoffPeriods(periods);
     });
 
     return () => unsubscribe();
-  }, [isAuthenticated]);
+  }, [enabled]);
 
-  // Calculate current period contributions from transactions
-  const currentPeriodStats = useMemo(() => {
+  const currentPeriodStats = useMemo((): CurrentPeriodStats | null => {
     if (!target?.isActive) return null;
-    
+
     const { start, end } = getCurrentCutoffPeriod(target.cutoffDays);
-    const startStr = start.toISOString().split('T')[0];
-    const endStr = end.toISOString().split('T')[0];
-    
-    const periodTransactions = transactions.filter(tx => {
-      return tx.date >= startStr && tx.date <= endStr;
-    });
-    
-    const contributions = {
-      pea: periodTransactions.filter(tx => tx.userId === 'pea').reduce((sum, tx) => sum + tx.amount, 0),
-      cam: periodTransactions.filter(tx => tx.userId === 'cam').reduce((sum, tx) => sum + tx.amount, 0),
-    };
-    
+    const startStr = getTodayLocalISO(start);
+    const endStr = getTodayLocalISO(end);
+
+    const periodTransactions = transactions.filter((tx) => tx.date >= startStr && tx.date <= endStr);
+
+    const contributions = buildMemberTotals(periodTransactions, memberProfileIds);
+
+    const progress: Record<string, number> = {};
+    const remaining: Record<string, number> = {};
+    for (const uid of memberProfileIds) {
+      const c = contributions[uid] ?? 0;
+      progress[uid] = Math.min(100, (c / target.targetAmount) * 100);
+      remaining[uid] = Math.max(0, target.targetAmount - c);
+    }
+
     const daysRemaining = Math.ceil((end.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
     const totalDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-    
+
     return {
       startDate: startStr,
       endDate: endStr,
@@ -121,34 +157,28 @@ export function useSavingsTarget(isAuthenticated: boolean, transactions: Transac
       targetAmount: target.targetAmount,
       daysRemaining: Math.max(0, daysRemaining),
       totalDays,
-      progress: {
-        pea: Math.min(100, (contributions.pea / target.targetAmount) * 100),
-        cam: Math.min(100, (contributions.cam / target.targetAmount) * 100),
-      },
-      remaining: {
-        pea: Math.max(0, target.targetAmount - contributions.pea),
-        cam: Math.max(0, target.targetAmount - contributions.cam),
-      },
+      progress,
+      remaining,
       isUrgent: daysRemaining <= 3 && daysRemaining > 0,
       isOverdue: daysRemaining <= 0,
     };
-  }, [target, transactions]);
+  }, [target, transactions, memberProfileIds]);
 
-  // Calculate total owed amounts from past periods
   const totalOwed = useMemo(() => {
-    const owed = { pea: 0, cam: 0 };
-    cutoffPeriods.forEach(period => {
+    const owed: Record<string, number> = {};
+    cutoffPeriods.forEach((period) => {
       if (period.owedAmounts) {
-        owed.pea += period.owedAmounts.pea || 0;
-        owed.cam += period.owedAmounts.cam || 0;
+        Object.entries(period.owedAmounts).forEach(([k, v]) => {
+          owed[k] = (owed[k] || 0) + (v || 0);
+        });
       }
     });
     return owed;
   }, [cutoffPeriods]);
 
-  // Set or update target
   const setTargetSettings = async (targetAmount: number, cutoffDays: number[] = [15, 0]) => {
-    const targetRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'savingsTarget', 'current');
+    if (!db) return;
+    const targetRef = householdDataDoc(db, 'savingsTarget', 'current');
     await setDoc(targetRef, {
       id: 'current',
       targetAmount,
@@ -158,25 +188,20 @@ export function useSavingsTarget(isAuthenticated: boolean, transactions: Transac
     });
   };
 
-  // Toggle target active state
   const toggleTarget = async (isActive: boolean) => {
-    if (!target) return;
-    const targetRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'savingsTarget', 'current');
+    if (!target || !db) return;
+    const targetRef = householdDataDoc(db, 'savingsTarget', 'current');
     await setDoc(targetRef, { ...target, isActive }, { merge: true });
   };
 
-  // Close current period and record owed amounts
   const closePeriod = async () => {
-    if (!target?.isActive || !currentPeriodStats) return;
-    
+    if (!target?.isActive || !currentPeriodStats || !db) return;
+
     const periodId = formatPeriodId(new Date(currentPeriodStats.endDate));
-    const periodRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'cutoffPeriods', periodId);
-    
-    const owedAmounts = {
-      pea: currentPeriodStats.remaining.pea,
-      cam: currentPeriodStats.remaining.cam,
-    };
-    
+    const periodRef = householdDataDoc(db, 'cutoffPeriods', periodId);
+
+    const owedAmounts: Record<string, number> = { ...currentPeriodStats.remaining };
+
     await setDoc(periodRef, {
       id: periodId,
       startDate: currentPeriodStats.startDate,
@@ -189,21 +214,32 @@ export function useSavingsTarget(isAuthenticated: boolean, transactions: Transac
     });
   };
 
-  // Pay off owed amount
-  const payOwed = async (periodId: string, userId: 'pea' | 'cam', amount: number) => {
-    const period = cutoffPeriods.find(p => p.id === periodId);
+  const payOwed = async (periodId: string, userId: string, amount: number) => {
+    if (!db) return;
+    const period = cutoffPeriods.find((p) => p.id === periodId);
     if (!period) return;
-    
-    const periodRef = doc(db, 'artifacts', APP_ID, 'public', 'data', 'cutoffPeriods', periodId);
+
+    const periodRef = householdDataDoc(db, 'cutoffPeriods', periodId);
     const newOwed = Math.max(0, (period.owedAmounts?.[userId] || 0) - amount);
-    
-    await setDoc(periodRef, {
-      ...period,
-      owedAmounts: {
-        ...period.owedAmounts,
-        [userId]: newOwed,
+
+    await setDoc(
+      periodRef,
+      {
+        ...period,
+        owedAmounts: {
+          ...period.owedAmounts,
+          [userId]: newOwed,
+        },
       },
-    }, { merge: true });
+      { merge: true }
+    );
+  };
+
+  /** Mark a closed period as open again for corrections (B-010). */
+  const reopenPeriod = async (periodId: string) => {
+    if (!db) return;
+    const periodRef = householdDataDoc(db, 'cutoffPeriods', periodId);
+    await setDoc(periodRef, { isComplete: false }, { merge: true });
   };
 
   return {
@@ -216,6 +252,6 @@ export function useSavingsTarget(isAuthenticated: boolean, transactions: Transac
     toggleTarget,
     closePeriod,
     payOwed,
+    reopenPeriod,
   };
 }
-

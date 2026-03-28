@@ -1,18 +1,24 @@
-import { useState, useEffect, useRef } from 'react';
-import { Gamepad2, Swords, Dices, Hash, X, Plus, RotateCcw, Sparkles, Send } from 'lucide-react';
-import { callGemini } from '@/lib/utils';
-import { GEMINI_API_KEY } from '@/config/firebase';
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { Gamepad2, X, Plus, RotateCcw, Send, User, Users } from 'lucide-react';
+import { generateAIText } from '@/lib/aiClient';
 import type { Theme, Profile } from '@/types';
 import type { GameSession } from '@/hooks/useGameSession';
+import { GAME_CATALOG, catalogMeta, type CatalogGameId } from '@/lib/gameCatalog';
+import { ChessGamePanel } from '@/components/games/ChessGamePanel';
+import { CheckersGamePanel } from '@/components/games/CheckersGamePanel';
+import { ConnectFourPanel } from '@/components/games/ConnectFourPanel';
+import { TicTacToePanel } from '@/components/games/TicTacToePanel';
 
 type RPSChoice = 'rock' | 'paper' | 'scissors';
 
-const GAMES = [
-  { id: 'rps' as const, title: 'Rock Paper Scissors', description: 'Settle it together!', icon: Swords, emoji: '✊' },
-  { id: 'roulette' as const, title: 'Random Roulette', description: 'Spin to decide anything', icon: Dices, emoji: '🎰' },
-  { id: 'rng' as const, title: 'Number Generator', description: 'Pick a random number', icon: Hash, emoji: '🔢' },
-  { id: 'decide' as const, title: 'Decide For Me', description: 'AI helps you decide', icon: Sparkles, emoji: '🤔' },
-];
+const QUICK_GAMES = GAME_CATALOG.filter((g) => g.category === 'quick');
+const BOARD_GAMES = GAME_CATALOG.filter((g) => g.category === 'board');
+
+const BOARD_GAME_IDS: CatalogGameId[] = ['chess', 'checkers', 'connect4', 'ttt'];
+
+function isBoardGameId(id: CatalogGameId): boolean {
+  return BOARD_GAME_IDS.includes(id);
+}
 
 const RPS_CHOICES: { id: RPSChoice; emoji: string; label: string }[] = [
   { id: 'rock', emoji: '🪨', label: 'Rock' },
@@ -41,12 +47,17 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
   const [showResult, setShowResult] = useState(false);
   const prevBothPicked = useRef(false);
 
-  const myField = currentProfileId === 'pea' ? 'peaChoice' : 'camChoice';
-  const myChoice = (currentProfileId === 'pea' ? session.peaChoice : session.camChoice) as RPSChoice | null;
-  const partnerChoice = (currentProfileId === 'pea' ? session.camChoice : session.peaChoice) as RPSChoice | null;
-  const partnerId = currentProfileId === 'pea' ? 'cam' : 'pea';
+  const solo = session.solo === true;
+  const isPea = currentProfileId === 'pea';
+  const myField = isPea ? 'peaChoice' : 'camChoice';
+  const partnerField = isPea ? 'camChoice' : 'peaChoice';
+  const myChoice = (isPea ? session.peaChoice : session.camChoice) as RPSChoice | null;
+  const partnerChoice = (isPea ? session.camChoice : session.peaChoice) as RPSChoice | null;
+  const partnerId = isPea ? 'cam' : 'pea';
   const partnerName = profiles[partnerId]?.name || partnerId;
   const bothPicked = myChoice !== null && partnerChoice !== null;
+  const yourScore = isPea ? session.rpsScorePea : session.rpsScoreCam;
+  const houseScore = isPea ? session.rpsScoreCam : session.rpsScorePea;
 
   useEffect(() => {
     if (bothPicked && !prevBothPicked.current) {
@@ -59,6 +70,12 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
 
   const handlePick = async (choice: RPSChoice) => {
     if (myChoice || animating) return;
+    if (solo) {
+      const pool: RPSChoice[] = ['rock', 'paper', 'scissors'];
+      const housePick = pool[Math.floor(Math.random() * pool.length)];
+      await onUpdate({ [myField]: choice, [partnerField]: housePick });
+      return;
+    }
     await onUpdate({ [myField]: choice });
   };
 
@@ -79,21 +96,51 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
 
   const result = bothPicked ? getWinner(session.peaChoice as RPSChoice, session.camChoice as RPSChoice) : null;
 
+  const resultLabel = (() => {
+    if (!bothPicked || result === null) return null;
+    if (solo) {
+      if (result === 'draw') return "It's a draw! 🤝";
+      const youWin = (isPea && result === 'a') || (!isPea && result === 'b');
+      return youWin ? 'You win! 🎉' : 'House wins! 🎲';
+    }
+    if (result === 'draw') return "It's a draw! 🤝";
+    if (result === 'a') return `${profiles.pea?.emoji} ${profiles.pea?.name} wins!`;
+    return `${profiles.cam?.emoji} ${profiles.cam?.name} wins!`;
+  })();
+
   return (
     <div className="space-y-6">
       {/* Scoreboard */}
       <div className="flex items-center justify-center gap-6">
-        <div className="text-center">
-          <div className="text-2xl mb-1">{profiles.pea?.emoji || '🌸'}</div>
-          <div className="text-sm font-bold text-slate-600">{profiles.pea?.name || 'Pea'}</div>
-          <div className="text-3xl font-bold text-slate-800">{session.rpsScorePea}</div>
-        </div>
-        <div className="text-slate-300 text-2xl font-bold">vs</div>
-        <div className="text-center">
-          <div className="text-2xl mb-1">{profiles.cam?.emoji || '📸'}</div>
-          <div className="text-sm font-bold text-slate-600">{profiles.cam?.name || 'Cam'}</div>
-          <div className="text-3xl font-bold text-slate-800">{session.rpsScoreCam}</div>
-        </div>
+        {solo ? (
+          <>
+            <div className="text-center">
+              <div className="text-2xl mb-1">{profiles[currentProfileId]?.emoji || '⭐'}</div>
+              <div className="text-sm font-bold text-slate-600">You</div>
+              <div className="text-3xl font-bold text-slate-800">{yourScore}</div>
+            </div>
+            <div className="text-slate-300 text-2xl font-bold">vs</div>
+            <div className="text-center">
+              <div className="text-2xl mb-1">🎲</div>
+              <div className="text-sm font-bold text-slate-600">House</div>
+              <div className="text-3xl font-bold text-slate-800">{houseScore}</div>
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="text-center">
+              <div className="text-2xl mb-1">{profiles.pea?.emoji || '🌸'}</div>
+              <div className="text-sm font-bold text-slate-600">{profiles.pea?.name || 'Pea'}</div>
+              <div className="text-3xl font-bold text-slate-800">{session.rpsScorePea}</div>
+            </div>
+            <div className="text-slate-300 text-2xl font-bold">vs</div>
+            <div className="text-center">
+              <div className="text-2xl mb-1">{profiles.cam?.emoji || '📸'}</div>
+              <div className="text-sm font-bold text-slate-600">{profiles.cam?.name || 'Cam'}</div>
+              <div className="text-3xl font-bold text-slate-800">{session.rpsScoreCam}</div>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Game Area */}
@@ -106,23 +153,33 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
         <div className="text-center space-y-4 animate-slide-in-from-bottom-4">
           <div className="flex items-center justify-center gap-8">
             <div className="text-center">
-              <div className="text-sm font-bold text-slate-400 mb-2">{profiles.pea?.emoji} {profiles.pea?.name}</div>
+              <div className="text-sm font-bold text-slate-400 mb-2">
+                {solo ? `${profiles[currentProfileId]?.emoji} You` : `${profiles.pea?.emoji} ${profiles.pea?.name}`}
+              </div>
               <div className="text-5xl">{RPS_CHOICES.find(c => c.id === session.peaChoice)?.emoji}</div>
             </div>
             <div className="text-2xl font-bold text-slate-300">vs</div>
             <div className="text-center">
-              <div className="text-sm font-bold text-slate-400 mb-2">{profiles.cam?.emoji} {profiles.cam?.name}</div>
+              <div className="text-sm font-bold text-slate-400 mb-2">
+                {solo ? '🎲 House' : `${profiles.cam?.emoji} ${profiles.cam?.name}`}
+              </div>
               <div className="text-5xl">{RPS_CHOICES.find(c => c.id === session.camChoice)?.emoji}</div>
             </div>
           </div>
-          <div className={`text-xl font-bold py-3 px-6 rounded-2xl inline-block ${
-            result === 'draw' ? 'bg-slate-100 text-slate-600'
-            : result === 'a' ? 'bg-pink-100 text-pink-600'
-            : 'bg-green-100 text-green-600'
-          }`}>
-            {result === 'draw' ? "It's a draw! 🤝"
-              : result === 'a' ? `${profiles.pea?.emoji} ${profiles.pea?.name} wins!`
-              : `${profiles.cam?.emoji} ${profiles.cam?.name} wins!`}
+          <div
+            className={`text-xl font-bold py-3 px-6 rounded-2xl inline-block ${
+              result === 'draw'
+                ? 'bg-slate-100 text-slate-600'
+                : solo
+                  ? (isPea ? result === 'a' : result === 'b')
+                    ? 'bg-pink-100 text-pink-600'
+                    : 'bg-violet-100 text-violet-700'
+                  : result === 'a'
+                    ? 'bg-pink-100 text-pink-600'
+                    : 'bg-green-100 text-green-600'
+            }`}
+          >
+            {resultLabel}
           </div>
           <div className="flex justify-center gap-3 pt-2">
             <button onClick={handlePlayAgain} className={`px-6 py-3 rounded-xl font-bold text-white shadow-lg active:scale-95 transition-transform ${currentTheme.bgClass}`}>
@@ -140,7 +197,9 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
               <div className={`inline-block px-4 py-2 rounded-xl text-sm font-bold text-white ${currentTheme.bgClass}`}>
                 Pick your move!
               </div>
-              {partnerChoice && <p className="text-xs text-slate-400">{partnerName} is ready! 👀</p>}
+              {!solo && partnerChoice && (
+                <p className="text-xs text-slate-400">{partnerName} is ready! 👀</p>
+              )}
               <div className="flex justify-center gap-4 pt-2">
                 {RPS_CHOICES.map(c => (
                   <button key={c.id} onClick={() => handlePick(c.id)}
@@ -155,7 +214,7 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
             <div className="py-6">
               <div className="text-5xl mb-3">{RPS_CHOICES.find(c => c.id === myChoice)?.emoji}</div>
               <p className="text-slate-600 font-bold">You picked {RPS_CHOICES.find(c => c.id === myChoice)?.label}!</p>
-              <p className="text-slate-400 text-sm mt-2">Waiting for {partnerName}...</p>
+              <p className="text-slate-400 text-sm mt-2">Waiting for {partnerName}…</p>
               <div className="mt-3 flex justify-center"><div className="w-6 h-6 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" /></div>
             </div>
           )}
@@ -366,16 +425,11 @@ async function callGeminiForDecide(
     }
   }
 
-  console.log('[DecideForMe] Calling Gemini', { type, hasApiKey: !!GEMINI_API_KEY, apiKeyPrefix: GEMINI_API_KEY?.slice(0, 8) + '...' });
-  console.log('[DecideForMe] System prompt:', systemPrompt);
-  console.log('[DecideForMe] User prompt:', prompt);
-
   try {
-    const response = await callGemini(prompt, GEMINI_API_KEY, systemPrompt);
-    console.log('[DecideForMe] Gemini response:', response);
+    const response = await generateAIText(prompt, systemPrompt);
     return response?.trim() || 'Go with your gut!';
   } catch (err) {
-    console.error('[DecideForMe] Gemini call FAILED:', err);
+    console.error('[DecideForMe] AI call FAILED:', err);
     throw err;
   }
 }
@@ -587,21 +641,31 @@ interface MiniGamesProps {
   currentProfileId: string;
   profiles: Record<string, Profile>;
   session: GameSession | null;
-  onCreateSession: (gameType: 'rps' | 'roulette' | 'rng' | 'decide') => Promise<void>;
+  onCreateSession: (gameType: GameSession['gameType'], opts?: { solo?: boolean }) => Promise<void>;
   onUpdateSession: (updates: Record<string, unknown>) => Promise<void>;
   onEndSession: () => Promise<void>;
 }
 
 export function MiniGames({ currentTheme, currentProfileId, profiles, session, onCreateSession, onUpdateSession, onEndSession }: MiniGamesProps) {
+  const [playAlone, setPlayAlone] = useState(false);
   const partnerId = currentProfileId === 'pea' ? 'cam' : 'pea';
   const partnerName = profiles[partnerId]?.name || partnerId;
 
-  const showModal = session && (
-    session.status === 'active' ||
-    (session.status === 'pending' && session.initiator === currentProfileId)
+  const visibleSession = useMemo((): GameSession | null => {
+    if (!session) return null;
+    if (session.solo && session.initiator !== currentProfileId) return null;
+    return session;
+  }, [session, currentProfileId]);
+
+  const showModal = Boolean(
+    visibleSession &&
+      (visibleSession.status === 'active' ||
+        (visibleSession.status === 'pending' && visibleSession.initiator === currentProfileId))
   );
 
-  const activeGameMeta = session ? GAMES.find(g => g.id === session.gameType) : null;
+  const activeGameMeta = visibleSession ? catalogMeta(visibleSession.gameType) : null;
+  const sessionBusy = visibleSession !== null;
+  const boardGameLayout = visibleSession && isBoardGameId(visibleSession.gameType);
 
   return (
     <div className="space-y-6">
@@ -609,32 +673,118 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
         <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
           <Gamepad2 size={24} /> Mini Games
         </h2>
-        <p className="text-slate-500 text-sm">Challenge your partner across devices!</p>
+        <p className="text-slate-500 text-sm">
+          {playAlone
+            ? 'Practice on your device — no invite, no waiting.'
+            : 'Challenge your partner across devices!'}
+        </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        {GAMES.map(game => {
-          const Icon = game.icon;
-          const hasSession = !!session;
-          return (
-            <button key={game.id} onClick={() => !hasSession && onCreateSession(game.id)} disabled={hasSession}
-              className={`bg-white rounded-2xl border border-slate-100 p-6 text-left shadow-sm transition-all group ${
-                hasSession ? 'opacity-50 cursor-not-allowed' : 'hover:shadow-md hover:scale-[1.02] active:scale-[0.98]'
-              }`}>
-              <div className={`w-14 h-14 rounded-xl flex items-center justify-center text-3xl mb-4 ${currentTheme.lightBg}`}>
-                {game.emoji}
-              </div>
-              <h3 className="font-bold text-slate-800 mb-1 flex items-center gap-2">
-                {game.title}
-                <Icon size={16} className="text-slate-300 group-hover:text-slate-500 transition-colors" />
-              </h3>
-              <p className="text-slate-400 text-sm">{game.description}</p>
-            </button>
-          );
-        })}
+      <div
+        className="flex rounded-2xl border border-slate-200 bg-slate-50/80 p-1 gap-1"
+        role="group"
+        aria-label="Play mode"
+      >
+        <button
+          type="button"
+          onClick={() => setPlayAlone(false)}
+          className={`flex-1 flex items-center justify-center gap-2 py-3 px-3 rounded-xl text-sm font-bold transition-all ${
+            !playAlone
+              ? `${currentTheme.bgClass} text-white shadow-md`
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <Users size={18} aria-hidden />
+          With partner
+        </button>
+        <button
+          type="button"
+          onClick={() => setPlayAlone(true)}
+          className={`flex-1 flex items-center justify-center gap-2 py-3 px-3 rounded-xl text-sm font-bold transition-all ${
+            playAlone
+              ? `${currentTheme.bgClass} text-white shadow-md`
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          <User size={18} aria-hidden />
+          Play alone
+        </button>
       </div>
 
-      {hasSession(session) && !showModal && (
+      <div className="space-y-6">
+        <div>
+          <h3 className="text-sm font-extrabold uppercase tracking-wider text-slate-400 mb-3">Quick play</h3>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {QUICK_GAMES.map((game) => {
+              const Icon = game.icon;
+              return (
+                <button
+                  key={game.id}
+                  type="button"
+                  onClick={() => !sessionBusy && onCreateSession(game.id, { solo: playAlone })}
+                  disabled={sessionBusy}
+                  className={`bg-white rounded-2xl border border-slate-100 p-6 text-left shadow-sm transition-all group ${
+                    sessionBusy
+                      ? 'opacity-50 cursor-not-allowed'
+                      : 'hover:shadow-md hover:scale-[1.02] active:scale-[0.98]'
+                  }`}
+                >
+                  <div
+                    className={`w-14 h-14 rounded-xl flex items-center justify-center text-3xl mb-4 ${currentTheme.lightBg}`}
+                  >
+                    {game.emoji}
+                  </div>
+                  <h4 className="font-bold text-slate-800 mb-1 flex items-center gap-2">
+                    {game.title}
+                    <Icon size={16} className="text-slate-300 group-hover:text-slate-500 transition-colors" />
+                  </h4>
+                  <p className="text-slate-400 text-sm">{game.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-extrabold uppercase tracking-wider text-slate-400 mb-1">Board games</h3>
+          <p className="text-xs text-slate-400 mb-3">
+            Chess uses <span className="font-semibold">chess.js</span> +{' '}
+            <span className="font-semibold">react-chessboard</span>. Checkers, Connect Four, and Tic-Tac-Toe use
+            lightweight built-in grids — all sync in real time for two players or support solo vs House.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {BOARD_GAMES.map((game) => {
+              const Icon = game.icon;
+              return (
+                <button
+                  key={game.id}
+                  type="button"
+                  onClick={() => !sessionBusy && onCreateSession(game.id, { solo: playAlone })}
+                  disabled={sessionBusy}
+                  className={`bg-white rounded-2xl border border-slate-100 p-6 text-left shadow-sm transition-all group ${
+                    sessionBusy
+                      ? 'opacity-50 cursor-not-allowed'
+                      : 'hover:shadow-md hover:scale-[1.02] active:scale-[0.98]'
+                  }`}
+                >
+                  <div
+                    className={`w-14 h-14 rounded-xl flex items-center justify-center text-3xl mb-4 ${currentTheme.lightBg}`}
+                  >
+                    {game.emoji}
+                  </div>
+                  <h4 className="font-bold text-slate-800 mb-1 flex items-center gap-2">
+                    {game.title}
+                    <Icon size={16} className="text-slate-300 group-hover:text-slate-500 transition-colors" />
+                  </h4>
+                  <p className="text-slate-400 text-sm">{game.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {visibleSession && !showModal && (
         <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-center">
           <p className="text-amber-700 text-sm font-medium">
             {partnerName} started a game — check your notification!
@@ -643,19 +793,32 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
       )}
 
       {/* Game Modal */}
-      {showModal && session && activeGameMeta && (
+      {showModal && visibleSession && activeGameMeta && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-slide-in-from-bottom-4 max-h-[90vh] flex flex-col">
+          <div
+            className={`bg-white rounded-3xl w-full shadow-2xl max-h-[90vh] flex flex-col ${
+              boardGameLayout
+                ? 'max-w-lg sm:max-w-xl overflow-visible animate-in'
+                : 'max-w-md overflow-hidden animate-slide-in-from-bottom-4'
+            }`}
+          >
             <div className={`p-6 text-white ${currentTheme.bgClass} shrink-0`}>
-              <div className="flex justify-between items-center">
-                <h3 className="font-bold text-xl flex items-center gap-2">
+              <div className="flex justify-between items-center gap-2">
+                <h3 className="font-bold text-xl flex flex-wrap items-center gap-2">
                   {activeGameMeta.emoji} {activeGameMeta.title}
+                  {visibleSession.solo && (
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider bg-white/20 px-2 py-0.5 rounded-lg">
+                      Solo
+                    </span>
+                  )}
                 </h3>
-                <button onClick={onEndSession} className="hover:bg-white/20 p-1 rounded-full"><X size={20} /></button>
+                <button type="button" onClick={onEndSession} className="hover:bg-white/20 p-1 rounded-full shrink-0">
+                  <X size={20} />
+                </button>
               </div>
             </div>
-            <div className="p-6 overflow-y-auto">
-              {session.status === 'pending' ? (
+            <div className={boardGameLayout ? 'p-6 overflow-visible' : 'p-6 overflow-y-auto'}>
+              {visibleSession.status === 'pending' ? (
                 <div className="text-center space-y-4 py-4">
                   <div className="text-5xl">⏳</div>
                   <h3 className="text-lg font-bold text-slate-800">Waiting for {partnerName} to join...</h3>
@@ -667,17 +830,77 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
                 </div>
               ) : (
                 <>
-                  {session.gameType === 'rps' && (
-                    <RPSGame session={session} currentProfileId={currentProfileId} profiles={profiles} currentTheme={currentTheme} onUpdate={onUpdateSession} />
+                  {visibleSession.gameType === 'rps' && (
+                    <RPSGame
+                      session={visibleSession}
+                      currentProfileId={currentProfileId}
+                      profiles={profiles}
+                      currentTheme={currentTheme}
+                      onUpdate={onUpdateSession}
+                    />
                   )}
-                  {session.gameType === 'roulette' && (
-                    <RouletteGame session={session} currentProfileId={currentProfileId} profiles={profiles} currentTheme={currentTheme} onUpdate={onUpdateSession} />
+                  {visibleSession.gameType === 'roulette' && (
+                    <RouletteGame
+                      session={visibleSession}
+                      currentProfileId={currentProfileId}
+                      profiles={profiles}
+                      currentTheme={currentTheme}
+                      onUpdate={onUpdateSession}
+                    />
                   )}
-                  {session.gameType === 'rng' && (
-                    <RNGGame session={session} currentProfileId={currentProfileId} profiles={profiles} currentTheme={currentTheme} onUpdate={onUpdateSession} />
+                  {visibleSession.gameType === 'rng' && (
+                    <RNGGame
+                      session={visibleSession}
+                      currentProfileId={currentProfileId}
+                      profiles={profiles}
+                      currentTheme={currentTheme}
+                      onUpdate={onUpdateSession}
+                    />
                   )}
-                  {session.gameType === 'decide' && (
-                    <DecideGame session={session} currentProfileId={currentProfileId} profiles={profiles} currentTheme={currentTheme} onUpdate={onUpdateSession} />
+                  {visibleSession.gameType === 'decide' && (
+                    <DecideGame
+                      session={visibleSession}
+                      currentProfileId={currentProfileId}
+                      profiles={profiles}
+                      currentTheme={currentTheme}
+                      onUpdate={onUpdateSession}
+                    />
+                  )}
+                  {visibleSession.gameType === 'chess' && (
+                    <ChessGamePanel
+                      session={visibleSession}
+                      currentProfileId={currentProfileId}
+                      profiles={profiles}
+                      currentTheme={currentTheme}
+                      onUpdate={onUpdateSession}
+                    />
+                  )}
+                  {visibleSession.gameType === 'checkers' && (
+                    <CheckersGamePanel
+                      session={visibleSession}
+                      currentProfileId={currentProfileId}
+                      profiles={profiles}
+                      currentTheme={currentTheme}
+                      onUpdate={onUpdateSession}
+                    />
+                  )}
+                  {visibleSession.gameType === 'connect4' && (
+                    <ConnectFourPanel
+                      session={visibleSession}
+                      currentProfileId={currentProfileId}
+                      profiles={profiles}
+                      currentTheme={currentTheme}
+                      onUpdate={onUpdateSession}
+                    />
+                  )}
+                  {visibleSession.gameType === 'ttt' && (
+                    <TicTacToePanel
+                      session={visibleSession}
+                      currentProfileId={currentProfileId}
+                      profiles={profiles}
+                      currentTheme={currentTheme}
+                      onUpdate={onUpdateSession}
+                    />
                   )}
                 </>
               )}
@@ -687,8 +910,4 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
       )}
     </div>
   );
-}
-
-function hasSession(session: GameSession | null): session is GameSession {
-  return session !== null;
 }

@@ -6,22 +6,40 @@ export interface Theme {
   border: string;
 }
 
+/** Where a withdrawal is drawn from (profile pools or shared). */
+export type SpendSource = 'pea' | 'cam' | 'joint';
+
+export type TransactionEntryKind = 'saving' | 'spend';
+
 export interface Profile {
   id: string;
   name: string;
   theme: keyof typeof import('@/lib/constants').THEMES;
   emoji: string;
+  /** Legacy plaintext PIN (prefer server pinHash via Cloud Functions) */
   pin: string | null;
+  pinHash?: string | null;
+  pinSalt?: string | null;
 }
 
 export interface Transaction {
   id: string;
   userId: string;
   amount: number;
+  /** Stored in Firestore as integer minor units (B-004); optional on legacy reads */
+  amountCents?: number;
   date: string;
   period: string;
   note: string;
+  /** Spending/savings category (C-001) */
+  category?: string;
+  /** Saving (deposit) vs spend (withdrawal); default saving for legacy docs */
+  entryKind?: TransactionEntryKind;
+  /** For spends: which pool was debited */
+  spendSource?: SpendSource;
   createdAt: string;
+  /** Soft delete (B-009) */
+  deletedAt?: string | null;
 }
 
 export interface NewTransaction {
@@ -29,6 +47,11 @@ export interface NewTransaction {
   date: string;
   note: string;
   goalId?: string;
+  category?: string;
+  entryKind?: TransactionEntryKind;
+  spendSource?: SpendSource;
+  /** Idempotency / dedupe hint (B-006) */
+  clientRequestId?: string;
 }
 
 export interface Goal {
@@ -36,6 +59,8 @@ export interface Goal {
   title: string;
   targetAmount: number;
   currentAmount: number;
+  targetAmountCents?: number;
+  currentAmountCents?: number;
   deadline: string;
   emoji: string;
   createdAt: string;
@@ -69,18 +94,15 @@ export interface CutoffPeriod {
   startDate: string;
   endDate: string;
   targetAmount: number;
-  contributions: {
-    pea: number;
-    cam: number;
-  };
-  owedAmounts: {
-    pea: number;
-    cam: number;
-  };
+  /** Per profile/member id (A-002) */
+  contributions: Record<string, number>;
+  owedAmounts: Record<string, number>;
   isComplete: boolean;
   createdAt: string;
 }
 
 export type ViewType = 'login' | 'dashboard';
 export type TabType = 'overview' | 'analytics' | 'goals' | 'targets' | 'games' | 'settings';
+
+export type HouseholdRole = 'owner' | 'member' | 'viewer';
 

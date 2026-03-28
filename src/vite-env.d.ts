@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/client" />
 
 interface ImportMetaEnv {
   readonly VITE_FIREBASE_API_KEY: string;
@@ -9,6 +10,11 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_APP_ID: string;
   readonly VITE_APP_ID: string;
   readonly VITE_GEMINI_API_KEY: string;
+  readonly VITE_HOUSEHOLD_ID?: string;
+  readonly VITE_FUNCTIONS_REGION?: string;
+  readonly VITE_FLAG_OPEN_FINANCE?: string;
+  readonly VITE_FLAG_VOICE_COACH?: string;
+  readonly VITE_FLAG_SOCIAL?: string;
 }
 
 interface ImportMeta {

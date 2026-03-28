@@ -1,13 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
 import { MessageCircle, X, Send, Sparkles, Bot, User, Loader2, Trash2 } from 'lucide-react';
-import { callGemini, formatCurrency } from '@/lib/utils';
-import { GEMINI_API_KEY } from '@/config/firebase';
+import { formatCurrency } from '@/lib/utils';
+import { generateAIText } from '@/lib/aiClient';
+import { useAIThread } from '@/hooks/useAIThread';
 import type { ChatMessage, Profile, Transaction, Goal, Theme, SavingsTarget, CutoffPeriod } from '@/types';
 
 interface AIChatProps {
   isOpen: boolean;
   onClose: () => void;
   onOpen: () => void;
+  /** When true, thread is stored under the household in Firestore (D-001). */
+  dataEnabled: boolean;
   currentTheme: Theme;
   profiles: Record<string, Profile>;
   transactions: Transaction[];
@@ -22,6 +25,7 @@ export function AIChat({
   isOpen,
   onClose,
   onOpen,
+  dataEnabled,
   currentTheme,
   profiles,
   transactions,
@@ -31,7 +35,7 @@ export function AIChat({
   savingsTarget,
   cutoffPeriods
 }: AIChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { messages, pushMessage, clearThread } = useAIThread(dataEnabled);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -70,29 +74,44 @@ export function AIChat({
 
     // Build cutoff periods info
     let cutoffInfo = '';
+    const memberIds = Object.keys(profiles).sort();
     if (cutoffPeriods.length > 0) {
       const recentCutoffs = cutoffPeriods.slice(0, 3);
-      cutoffInfo = recentCutoffs.map(cp => {
-        const peaOwed = cp.owedAmounts?.pea || 0;
-        const camOwed = cp.owedAmounts?.cam || 0;
+      cutoffInfo = recentCutoffs.map((cp) => {
         const status = cp.isComplete ? '✅ Complete' : '⏳ In Progress';
-        return `${cp.startDate} to ${cp.endDate} (${status}):
-  - ${profiles.pea?.name || 'Pea'}: Saved ${formatCurrency(cp.contributions?.pea || 0)}${peaOwed > 0 ? `, owes ${formatCurrency(peaOwed)}` : ''}
-  - ${profiles.cam?.name || 'Cam'}: Saved ${formatCurrency(cp.contributions?.cam || 0)}${camOwed > 0 ? `, owes ${formatCurrency(camOwed)}` : ''}`;
+        const memberLines = memberIds
+          .map((pid) => {
+            const saved = cp.contributions?.[pid] || 0;
+            const owed = cp.owedAmounts?.[pid] || 0;
+            const name = profiles[pid]?.name || pid;
+            return `  - ${name}: Saved ${formatCurrency(saved)}${owed > 0 ? `, owes ${formatCurrency(owed)}` : ''}`;
+          })
+          .join('\n');
+        return `${cp.startDate} to ${cp.endDate} (${status}):\n${memberLines}`;
       }).join('\n\n');
     }
 
-    // Calculate total owed amounts
-    const totalPeaOwed = cutoffPeriods.reduce((sum, cp) => sum + (cp.owedAmounts?.pea || 0), 0);
-    const totalCamOwed = cutoffPeriods.reduce((sum, cp) => sum + (cp.owedAmounts?.cam || 0), 0);
+    const totalOwedLines = memberIds
+      .map((pid) => {
+        const total = cutoffPeriods.reduce((sum, cp) => sum + (cp.owedAmounts?.[pid] || 0), 0);
+        const name = profiles[pid]?.name || pid;
+        return `- ${name} owes: ${formatCurrency(total)}`;
+      })
+      .join('\n');
+
+    const contributionLines = memberIds
+      .map((pid) => {
+        const name = profiles[pid]?.name || pid;
+        return `- ${name}'s contribution: ${formatCurrency(userTotals[pid] || 0)}`;
+      })
+      .join('\n');
 
     return `
 You are a friendly, encouraging AI financial coach for a couple's joint savings app called "Money Mates".
 
 CURRENT FINANCIAL STATUS:
 - Total Combined Savings: ${formatCurrency(totalSavings)}
-- ${profiles.pea?.name || 'Pea'}'s contribution: ${formatCurrency(userTotals.pea || 0)}
-- ${profiles.cam?.name || 'Cam'}'s contribution: ${formatCurrency(userTotals.cam || 0)}
+${contributionLines}
 
 BI-MONTHLY SAVINGS TARGET:
 ${targetInfo}
@@ -101,8 +120,7 @@ CUTOFF PERIOD HISTORY (Most Recent):
 ${cutoffInfo || 'No cutoff periods tracked yet'}
 
 OWED AMOUNTS (Accumulated):
-- ${profiles.pea?.name || 'Pea'} owes: ${formatCurrency(totalPeaOwed)}
-- ${profiles.cam?.name || 'Cam'} owes: ${formatCurrency(totalCamOwed)}
+${totalOwedLines || '- None recorded'}
 
 RECENT TRANSACTIONS:
 ${recentTx || 'No transactions yet'}
@@ -127,64 +145,50 @@ INSTRUCTIONS:
   const sendMessage = async () => {
     if (!input.trim() || isLoading) return;
 
-    const userMessage: ChatMessage = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: input.trim(),
-      timestamp: new Date()
-    };
-
-    setMessages(prev => [...prev, userMessage]);
+    const trimmed = input.trim();
     setInput('');
     setIsLoading(true);
 
-    try {
-      if (!GEMINI_API_KEY) {
-        throw new Error('API key not configured');
-      }
+    const pendingUser: ChatMessage = {
+      id: 'pending-user',
+      role: 'user',
+      content: trimmed,
+      timestamp: new Date(),
+    };
 
-      // Build conversation history for context
-      const conversationHistory = messages
-        .slice(-6) // Last 6 messages for context
-        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    try {
+      await pushMessage('user', trimmed);
+
+      const historyForModel = [...messages, pendingUser].slice(-6);
+      const conversationHistory = historyForModel
+        .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
         .join('\n');
 
       const prompt = `
 Previous conversation:
 ${conversationHistory}
 
-User: ${input.trim()}
+User: ${trimmed}
 
 Respond naturally to the user's message, considering the conversation history.
       `.trim();
 
-      const response = await callGemini(prompt, GEMINI_API_KEY, buildContext());
-
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: response || "I'm having trouble responding right now. Please try again!",
-        timestamp: new Date()
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-    } catch (error) {
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: GEMINI_API_KEY 
-          ? "Sorry, I couldn't process that. Please try again!" 
-          : "AI Chat requires a Gemini API key. Please add VITE_GEMINI_API_KEY to your .env file.",
-        timestamp: new Date()
-      };
-      setMessages(prev => [...prev, errorMessage]);
+      const response = await generateAIText(prompt, buildContext());
+      const text =
+        response || "I'm having trouble responding right now. Please try again!";
+      await pushMessage('assistant', text);
+    } catch {
+      await pushMessage(
+        'assistant',
+        "Sorry, I couldn't process that. Deploy the generateAI Cloud Function or configure AI for local dev — see README."
+      );
     } finally {
       setIsLoading(false);
     }
   };
 
   const clearChat = () => {
-    setMessages([]);
+    void clearThread();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -207,16 +211,18 @@ Respond naturally to the user's message, considering the conversation history.
       {/* Chat Button */}
       {!isOpen && (
         <button
+          type="button"
           onClick={onOpen}
-          className="fixed bottom-24 right-6 w-14 h-14 rounded-full bg-gradient-to-br from-violet-500 to-purple-600 text-white shadow-xl flex items-center justify-center hover:shadow-2xl hover:scale-105 transition-all z-40"
+          className="fixed z-40 right-4 md:right-6 w-12 h-12 md:w-14 md:h-14 rounded-xl md:rounded-full bg-gradient-to-br from-violet-500 to-purple-600 text-white shadow-lg shadow-violet-900/25 flex items-center justify-center active:scale-95 transition-transform bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px)+5.25rem)] md:bottom-24"
+          aria-label="Open AI coach chat"
         >
-          <MessageCircle size={24} />
+          <MessageCircle size={22} className="md:w-6 md:h-6" />
         </button>
       )}
 
       {/* Chat Panel */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 w-[380px] max-w-[calc(100vw-48px)] h-[600px] max-h-[calc(100vh-100px)] bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden z-50 flex flex-col animate-slide-in-from-right-4">
+        <div className="fixed z-[60] flex flex-col bg-white shadow-2xl overflow-hidden animate-slide-in-from-right-4 max-md:inset-0 max-md:max-h-[100dvh] max-md:rounded-none safe-area-pt md:bottom-6 md:right-6 md:left-auto md:top-auto md:w-[380px] md:max-w-[min(380px,calc(100vw-2rem))] md:h-[min(600px,calc(100dvh-5rem))] md:rounded-3xl md:border md:border-slate-200 md:ring-1 md:ring-slate-200/80">
           {/* Header */}
           <div className="bg-gradient-to-r from-violet-600 to-purple-600 p-4 flex items-center justify-between text-white shrink-0">
             <div className="flex items-center gap-3">
@@ -316,22 +322,24 @@ Respond naturally to the user's message, considering the conversation history.
           </div>
 
           {/* Input */}
-          <div className="p-4 border-t border-slate-100 shrink-0">
-            <div className="flex gap-2">
+          <div className="p-3 sm:p-4 border-t border-slate-100 shrink-0 safe-area-pb bg-white">
+            <div className="flex gap-2 items-end">
               <input
                 ref={inputRef}
                 type="text"
+                enterKeyHint="send"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Ask me anything..."
-                className="flex-1 bg-slate-100 rounded-xl px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-violet-200 transition-all"
+                className="flex-1 min-h-12 bg-slate-100 rounded-xl px-4 py-3 text-base sm:text-sm outline-none focus:ring-2 focus:ring-violet-200 transition-all"
                 disabled={isLoading}
               />
               <button
+                type="button"
                 onClick={sendMessage}
                 disabled={!input.trim() || isLoading}
-                className={`w-12 h-12 rounded-xl flex items-center justify-center transition-all ${
+                className={`min-h-12 min-w-12 shrink-0 rounded-xl flex items-center justify-center transition-all ${
                   input.trim() && !isLoading
                     ? 'bg-violet-600 text-white hover:bg-violet-700'
                     : 'bg-slate-200 text-slate-400'

@@ -16,10 +16,19 @@ export function getAutoPeriod(dateStr: string): string {
   return day <= 15 ? `${month} 1-15, ${year}` : `${month} 16-End, ${year}`;
 }
 
-export function getTodayISO(): string {
-  return new Date().toISOString().split('T')[0];
+/** Local calendar date as YYYY-MM-DD (avoids UTC shift from toISOString). */
+export function getTodayLocalISO(d = new Date()): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 
+export function getTodayISO(): string {
+  return getTodayLocalISO();
+}
+
+/** Direct Gemini call — prefer generateAIText from aiClient for production. */
 export async function callGemini(
   prompt: string,
   apiKey: string,

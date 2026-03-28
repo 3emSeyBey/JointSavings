@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { Key } from 'lucide-react';
+import { useToast } from '@/context/ToastContext';
 import type { Profile, Theme } from '@/types';
+import { profileHasPin } from '@/lib/profilePin';
+import { canUseServerPin, setServerPin, clearServerPin } from '@/lib/pinClient';
 
 interface SettingsProps {
   currentProfile: Profile;
@@ -9,6 +12,7 @@ interface SettingsProps {
 }
 
 export function Settings({ currentProfile, currentTheme, onUpdateProfile }: SettingsProps) {
+  const { showToast } = useToast();
   const [editingName, setEditingName] = useState(currentProfile.name);
   const [newPin, setNewPin] = useState('');
   const [isSaving, setIsSaving] = useState(false);
@@ -23,20 +27,28 @@ export function Settings({ currentProfile, currentTheme, onUpdateProfile }: Sett
       }
       
       if (newPin === 'REMOVE') {
+        if (canUseServerPin()) {
+          await clearServerPin(currentProfile.id);
+        }
         updates.pin = null;
       } else if (newPin !== '') {
-        updates.pin = newPin;
+        if (newPin.length === 4 && canUseServerPin()) {
+          await setServerPin(currentProfile.id, newPin);
+          updates.pin = null;
+        } else {
+          updates.pin = newPin;
+        }
       }
-      
+
       if (Object.keys(updates).length > 0) {
         await onUpdateProfile(updates);
       }
       
       setNewPin('');
-      alert('Profile updated!');
+      showToast('Profile updated', 'success');
     } catch (error) {
       console.error('Error saving profile:', error);
-      alert('Failed to save profile');
+      showToast('Failed to save profile', 'error');
     } finally {
       setIsSaving(false);
     }
@@ -45,9 +57,12 @@ export function Settings({ currentProfile, currentTheme, onUpdateProfile }: Sett
   const handleRemovePin = async () => {
     setIsSaving(true);
     try {
+      if (canUseServerPin()) {
+        await clearServerPin(currentProfile.id);
+      }
       await onUpdateProfile({ pin: null });
       setNewPin('');
-      alert('PIN disabled!');
+      showToast('PIN disabled', 'success');
     } finally {
       setIsSaving(false);
     }
@@ -94,13 +109,13 @@ export function Settings({ currentProfile, currentTheme, onUpdateProfile }: Sett
               <input
                 type="password"
                 maxLength={4}
-                placeholder={currentProfile.pin ? '••••' : 'Set 4-digit PIN'}
+                placeholder={profileHasPin(currentProfile) ? '••••' : 'Set 4-digit PIN'}
                 className="w-full bg-slate-50 pl-10 pr-4 py-3 rounded-xl font-bold placeholder:font-normal outline-none border border-transparent focus:border-slate-200 transition-colors"
                 value={newPin === 'REMOVE' ? '' : newPin}
                 onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
               />
             </div>
-            {currentProfile.pin && (
+            {profileHasPin(currentProfile) && (
               <button
                 onClick={handleRemovePin}
                 disabled={isSaving}

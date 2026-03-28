@@ -1,45 +1,52 @@
 import { useState, useEffect } from 'react';
-import { doc, onSnapshot, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { db, APP_ID } from '@/config/firebase';
+import { onSnapshot, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { db } from '@/config/firebase';
+import { householdDataDoc } from '@/lib/firestorePaths';
+import { initialBoardStateJson, type BoardGameKind } from '@/lib/boardGameState';
 
 export interface GameSession {
   id: string;
-  gameType: 'rps' | 'roulette' | 'rng' | 'decide';
+  gameType: 'rps' | 'roulette' | 'rng' | 'decide' | 'chess' | 'checkers' | 'connect4' | 'ttt';
   status: 'pending' | 'active' | 'finished';
+  /** When true, only `initiator` sees the session; starts active with no partner invite. */
+  solo?: boolean;
   initiator: string;
   createdAt: string;
-  // RPS
   peaChoice: string | null;
   camChoice: string | null;
   rpsRound: number;
   rpsScorePea: number;
   rpsScoreCam: number;
-  // Roulette
   rouletteItems: string[];
   rouletteResult: string | null;
   rouletteSpinTs: number | null;
-  // RNG
   rngMin: number;
   rngMax: number;
   rngResult: number | null;
   rngRollTs: number | null;
-  // Decide
   decideQuestion: string;
   decideOptions: string[];
   decideMode: 'think' | 'random';
   decideChat: Array<{ role: string; text: string }>;
   decideResult: string | null;
   decideLoading: boolean;
+  /** JSON payloads for chess / checkers / connect4 / tic-tac-toe — see `boardGameState.ts`. */
+  boardStateJson?: string;
 }
 
-const getSessionDoc = () => doc(db, 'artifacts', APP_ID, 'public', 'data', 'gameSessions', 'active');
+function getSessionDocRef() {
+  if (!db) return null;
+  return householdDataDoc(db, 'gameSessions', 'active');
+}
 
-export function useGameSession(isAuthenticated: boolean, currentProfileId: string | null) {
+export function useGameSession(enabled: boolean, currentProfileId: string | null) {
   const [session, setSession] = useState<GameSession | null>(null);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
-    const unsub = onSnapshot(getSessionDoc(), (snap) => {
+    if (!enabled || !db) return;
+    const ref = getSessionDocRef();
+    if (!ref) return;
+    const unsub = onSnapshot(ref, (snap) => {
       if (snap.exists()) {
         setSession({ id: snap.id, ...snap.data() } as GameSession);
       } else {
@@ -47,13 +54,24 @@ export function useGameSession(isAuthenticated: boolean, currentProfileId: strin
       }
     });
     return () => unsub();
-  }, [isAuthenticated]);
+  }, [enabled]);
 
-  const createSession = async (gameType: GameSession['gameType']) => {
-    if (!currentProfileId) return;
-    await setDoc(getSessionDoc(), {
+  const createSession = async (
+    gameType: GameSession['gameType'],
+    opts?: { solo?: boolean }
+  ) => {
+    if (!currentProfileId || !db) return;
+    const ref = getSessionDocRef();
+    if (!ref) return;
+    const solo = opts?.solo === true;
+    const boardKinds: BoardGameKind[] = ['chess', 'checkers', 'connect4', 'ttt'];
+    const boardStateJson = boardKinds.includes(gameType as BoardGameKind)
+      ? initialBoardStateJson(gameType as BoardGameKind)
+      : '';
+    await setDoc(ref, {
       gameType,
-      status: 'pending',
+      solo,
+      status: solo ? 'active' : 'pending',
       initiator: currentProfileId,
       createdAt: new Date().toISOString(),
       peaChoice: null,
@@ -74,23 +92,30 @@ export function useGameSession(isAuthenticated: boolean, currentProfileId: strin
       decideChat: [],
       decideResult: null,
       decideLoading: false,
+      boardStateJson,
     });
   };
 
   const joinSession = async () => {
-    await updateDoc(getSessionDoc(), { status: 'active' });
+    const ref = getSessionDocRef();
+    if (!ref) return;
+    await updateDoc(ref, { status: 'active' });
   };
 
   const updateSession = async (updates: Record<string, unknown>) => {
-    await updateDoc(getSessionDoc(), updates);
+    const ref = getSessionDocRef();
+    if (!ref) return;
+    await updateDoc(ref, updates);
   };
 
   const endSession = async () => {
-    await deleteDoc(getSessionDoc());
+    const ref = getSessionDocRef();
+    if (!ref) return;
+    await deleteDoc(ref);
   };
 
-  const pendingInvite = session?.status === 'pending' && session.initiator !== currentProfileId
-    ? session : null;
+  const pendingInvite =
+    session?.status === 'pending' && session.initiator !== currentProfileId ? session : null;
 
   return { session, pendingInvite, createSession, joinSession, updateSession, endSession };
 }

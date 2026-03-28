@@ -1,12 +1,17 @@
 import { useState, useMemo, useEffect } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { Plus, Loader2 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
+import { useToast } from '@/context/ToastContext';
 import { useSession } from '@/hooks/useSession';
 import { useProfiles, useTransactions, useGoals } from '@/hooks/useFirestore';
 import { useSavingsTarget } from '@/hooks/useSavingsTarget';
 import { useGameSession } from '@/hooks/useGameSession';
+import { useHouseholdMembership } from '@/hooks/useHouseholdMembership';
 import { THEMES, DEFAULT_PROFILES } from '@/lib/constants';
 import { getTodayISO } from '@/lib/utils';
+import { migrateLegacyToHouseholdIfNeeded } from '@/lib/migrateLegacyFirestore';
+import { db } from '@/config/firebase';
 import {
   LoginView,
   Header,
@@ -17,26 +22,64 @@ import {
   Analytics,
   AIChat,
   ParticlesBackground,
+  MeshBackdrop,
+  DashboardWhimsy,
+  WanderingPetsOverlay,
   SavingsTargets,
   MiniGames,
+  MobileTabBar,
 } from '@/components';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import type { ViewType, TabType, NewTransaction, Profile, NewGoal } from '@/types';
+import { profileHasPin } from '@/lib/profilePin';
+import { buildMemberTotals } from '@/lib/transactionTotals';
+import { inviteLabelForGameType } from '@/lib/gameCatalog';
 
 export default function App() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, signInWithGoogle } = useAuth();
+  const { showToast } = useToast();
+  const [firestoreReady, setFirestoreReady] = useState(false);
+
+  const { canWrite, membershipReady } = useHouseholdMembership(Boolean(user && db), user?.uid);
+
+  useEffect(() => {
+    if (!db || !user) {
+      setFirestoreReady(true);
+      return;
+    }
+    if (!membershipReady) return;
+    let alive = true;
+    migrateLegacyToHouseholdIfNeeded(db)
+      .catch((e) => console.error('Legacy migration:', e))
+      .finally(() => {
+        if (alive) setFirestoreReady(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [user, membershipReady]);
+
+  const dataEnabled = Boolean(user && db && membershipReady && firestoreReady);
+
   const { sessionProfileId, isSessionLoading, saveSession, clearSession } = useSession();
-  const { profiles, updateProfile } = useProfiles(!!user);
-  const { transactions, addTransaction, deleteTransaction } = useTransactions(!!user);
-  const { goals, addGoal, contributeToGoal, contributeToGoalById, deleteGoal } = useGoals(!!user);
-  const { 
-    target, 
-    currentPeriodStats, 
-    cutoffPeriods, 
+  const { profiles, updateProfile } = useProfiles(dataEnabled);
+  const profileIds = useMemo(() => Object.keys(profiles).sort(), [profiles]);
+  const { transactions, addTransaction, softDeleteTransaction } = useTransactions(
+    dataEnabled,
+    user?.uid
+  );
+  const { goals, addGoal, contributeToGoal, deleteGoal } = useGoals(dataEnabled);
+  const {
+    target,
+    currentPeriodStats,
+    cutoffPeriods,
     totalOwed,
-    setTargetSettings, 
-    toggleTarget, 
-    closePeriod 
-  } = useSavingsTarget(!!user, transactions);
+    setTargetSettings,
+    toggleTarget,
+    closePeriod,
+    payOwed,
+    reopenPeriod,
+  } = useSavingsTarget(dataEnabled, transactions, profileIds);
 
   // View & Navigation State
   const [view, setView] = useState<ViewType>('login');
@@ -51,7 +94,7 @@ export default function App() {
     joinSession,
     updateSession: updateGameSession,
     endSession,
-  } = useGameSession(!!user, currentProfileId);
+  } = useGameSession(dataEnabled, currentProfileId);
 
   // Modal State
   const [showAddModal, setShowAddModal] = useState(false);
@@ -61,6 +104,9 @@ export default function App() {
     date: getTodayISO(),
     note: '',
     goalId: undefined,
+    category: 'general',
+    entryKind: 'saving',
+    spendSource: undefined,
   });
 
   // AI Chat State
@@ -75,7 +121,7 @@ export default function App() {
     const profile = profiles[sessionProfileId];
     if (profile) {
       // Check if profile has PIN
-      if (profile.pin && profile.pin.trim() !== '') {
+      if (profileHasPin(profile)) {
         // Require PIN verification
         setNeedsPinVerification(true);
         setView('login');
@@ -89,8 +135,9 @@ export default function App() {
 
   // Computed values
   const currentProfile = currentProfileId ? profiles[currentProfileId] : null;
-  const partnerProfileId = currentProfileId === 'pea' ? 'cam' : 'pea';
-  const partnerProfile = profiles[partnerProfileId];
+  const partnerProfileId =
+    profileIds.find((id) => id !== currentProfileId) ?? profileIds[0] ?? '';
+  const partnerProfile = partnerProfileId ? profiles[partnerProfileId] : undefined;
   const currentTheme = currentProfile
     ? THEMES[currentProfile.theme]
     : THEMES.emerald;
@@ -100,15 +147,10 @@ export default function App() {
     [transactions]
   );
 
-  const userTotals = useMemo(() => {
-    const totals: Record<string, number> = { pea: 0, cam: 0 };
-    transactions.forEach((t) => {
-      if (totals[t.userId] !== undefined) {
-        totals[t.userId] += Number(t.amount);
-      }
-    });
-    return totals;
-  }, [transactions]);
+  const userTotals = useMemo(
+    () => buildMemberTotals(transactions, profileIds),
+    [transactions, profileIds]
+  );
 
   // Handlers
   const handleProfileSelect = (profileId: string) => {
@@ -129,28 +171,46 @@ export default function App() {
 
   const handleAddTransaction = async () => {
     if (!newTx.amount || !currentProfileId || isSubmitting) return;
-    
+    if (newTx.entryKind === 'spend' && !newTx.spendSource) {
+      showToast('Choose whether this came from Pea, Cam, or joint', 'error');
+      return;
+    }
+
     setIsSubmitting(true);
-    
+    const wasSpend = newTx.entryKind === 'spend';
+
     try {
-      const txId = await addTransaction(currentProfileId, newTx);
-      
-      if (txId && newTx.goalId) {
-        try {
-          await contributeToGoalById(newTx.goalId, Number(newTx.amount));
-        } catch (goalError) {
-          console.error('Failed to update goal:', goalError);
-        }
-      }
-      
+      const clientRequestId =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `tx-${Date.now()}`;
+      await addTransaction(currentProfileId, { ...newTx, clientRequestId });
+
       setShowAddModal(false);
-      setNewTx({ amount: '', date: getTodayISO(), note: '', goalId: undefined });
+      setNewTx({
+        amount: '',
+        date: getTodayISO(),
+        note: '',
+        goalId: undefined,
+        category: 'general',
+        entryKind: 'saving',
+        spendSource: undefined,
+      });
+      showToast(wasSpend ? 'Spending recorded' : 'Saving recorded', 'success');
     } catch (error) {
       console.error('Failed to add transaction:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      alert(`Failed to save: ${errorMessage}`);
+      showToast(`Failed to save: ${errorMessage}`, 'error');
       setShowAddModal(false);
-      setNewTx({ amount: '', date: getTodayISO(), note: '', goalId: undefined });
+      setNewTx({
+        amount: '',
+        date: getTodayISO(),
+        note: '',
+        goalId: undefined,
+        category: 'general',
+        entryKind: 'saving',
+        spendSource: undefined,
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -159,7 +219,15 @@ export default function App() {
   const handleCloseModal = () => {
     if (isSubmitting) return;
     setShowAddModal(false);
-    setNewTx({ amount: '', date: getTodayISO(), note: '', goalId: undefined });
+    setNewTx({
+      amount: '',
+      date: getTodayISO(),
+      note: '',
+      goalId: undefined,
+      category: 'general',
+      entryKind: 'saving',
+      spendSource: undefined,
+    });
   };
 
   const handleUpdateProfile = async (updates: Partial<Profile>) => {
@@ -183,13 +251,14 @@ export default function App() {
   };
 
   // Show loading screen while checking session
-  if (authLoading || isSessionLoading) {
+  if (authLoading || isSessionLoading || (user && (!membershipReady || !firestoreReady))) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center relative overflow-hidden">
-        <ParticlesBackground color="#ec4899" />
-        <div className="text-center relative z-10">
-          <Loader2 size={48} className="animate-spin text-pink-400 mx-auto mb-4" />
-          <p className="text-slate-400 font-medium">Loading...</p>
+      <div className="relative min-h-dvh overflow-hidden flex items-center justify-center">
+        <MeshBackdrop />
+        <ParticlesBackground color="#22d3ee" />
+        <div className="text-center relative z-10 px-4">
+          <Loader2 size={48} className="animate-spin text-[var(--accent-a)] mx-auto mb-4 drop-shadow-[0_0_12px_var(--border-glow)]" />
+          <p className="text-[var(--text-dim)] font-display font-semibold tracking-wide">Syncing ledger…</p>
         </div>
       </div>
     );
@@ -198,10 +267,18 @@ export default function App() {
   // Render Login View
   if (view === 'login') {
     return (
-      <LoginView 
-        profiles={profiles} 
+      <LoginView
+        profiles={profiles}
         onProfileSelect={handleProfileSelect}
         pendingSessionProfileId={needsPinVerification ? sessionProfileId : null}
+        onSignInWithGoogle={async () => {
+          try {
+            await signInWithGoogle();
+          } catch (e) {
+            console.error(e);
+            showToast('Google sign-in failed', 'error');
+          }
+        }}
       />
     );
   }
@@ -212,164 +289,209 @@ export default function App() {
   const tabs: TabType[] = ['overview', 'targets', 'goals', 'analytics', 'games', 'settings'];
 
   return (
-    <div className="min-h-screen bg-slate-50 pb-24 md:pb-0 font-sans">
-      <Header
-        profile={currentProfile}
-        theme={currentTheme}
-        onAskCoach={() => setAiChatOpen(true)}
-        onLogout={handleLogout}
-      />
+    <div className="relative min-h-dvh font-sans text-[var(--text)] pb-[calc(5.25rem+env(safe-area-inset-bottom,0px))] md:pb-0 overflow-x-hidden">
+      <MeshBackdrop />
+      <DashboardWhimsy />
 
-      <main className="max-w-4xl mx-auto p-6 space-y-8">
-        {/* Tab Navigation */}
-        <div className="flex p-1 bg-slate-200 rounded-xl overflow-x-auto">
-          {tabs.map((tab) => (
-            <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-2.5 px-2 text-xs sm:text-sm font-bold rounded-lg capitalize transition-all whitespace-nowrap ${
-                activeTab === tab
-                  ? 'bg-white text-slate-800 shadow-sm'
-                  : 'text-slate-500 hover:text-slate-700'
-              }`}
-            >
-              {tab === 'goals' ? '🎯 Goals' : tab === 'targets' ? '📅 Targets' : tab === 'games' ? '🎮 Games' : tab}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab Content */}
-        {activeTab === 'overview' && (
-          <Overview
-            currentProfile={currentProfile}
-            partnerProfile={partnerProfile}
-            currentTheme={currentTheme}
-            totalSavings={totalSavings}
-            userTotals={userTotals}
-            transactions={transactions}
-            profiles={profiles}
-            onDeleteTransaction={deleteTransaction}
-          />
-        )}
-
-        {activeTab === 'targets' && (
-          <SavingsTargets
-            target={target}
-            currentPeriodStats={currentPeriodStats}
-            cutoffPeriods={cutoffPeriods}
-            totalOwed={totalOwed}
-            profiles={profiles}
-            currentTheme={currentTheme}
-            onSetTarget={setTargetSettings}
-            onToggleTarget={toggleTarget}
-            onClosePeriod={closePeriod}
-          />
-        )}
-
-        {activeTab === 'goals' && (
-          <Goals
-            goals={goals}
-            currentTheme={currentTheme}
-            onAddGoal={handleAddGoal}
-            onContribute={contributeToGoal}
-            onDeleteGoal={deleteGoal}
-          />
-        )}
-
-        {activeTab === 'analytics' && (
-          <Analytics
-            transactions={transactions}
-            profiles={profiles}
-            currentTheme={currentTheme}
-            totalSavings={totalSavings}
-            userTotals={userTotals}
-          />
-        )}
-
-        {activeTab === 'games' && currentProfileId && (
-          <MiniGames
-            currentTheme={currentTheme}
-            currentProfileId={currentProfileId}
-            profiles={profiles}
-            session={gameSession}
-            onCreateSession={createSession}
-            onUpdateSession={updateGameSession}
-            onEndSession={endSession}
-          />
-        )}
-
-        {activeTab === 'settings' && (
-          <Settings
-            currentProfile={currentProfile}
-            currentTheme={currentTheme}
-            onUpdateProfile={handleUpdateProfile}
-          />
-        )}
-      </main>
-
-      {/* Floating Action Button */}
-      <button
-        onClick={() => setShowAddModal(true)}
-        className={`fixed bottom-6 right-6 w-16 h-16 rounded-full shadow-xl flex items-center justify-center text-white active:scale-90 transition-all z-40 ${currentTheme.bgClass} hover:shadow-2xl`}
-      >
-        <Plus size={32} />
-      </button>
-
-      {/* Transaction Modal */}
-      {showAddModal && (
-        <TransactionModal
+      <div className="relative z-10 max-md:px-4 md:px-0">
+        <Header
+          profile={currentProfile}
           theme={currentTheme}
-          newTx={newTx}
-          goals={goals}
-          isSubmitting={isSubmitting}
-          onNewTxChange={setNewTx}
-          onSubmit={handleAddTransaction}
-          onClose={handleCloseModal}
+          onAskCoach={() => setAiChatOpen(true)}
+          onLogout={handleLogout}
         />
-      )}
 
-      {/* AI Chat */}
-      <AIChat
-        isOpen={aiChatOpen}
-        onOpen={() => setAiChatOpen(true)}
-        onClose={() => setAiChatOpen(false)}
-        currentTheme={currentTheme}
-        profiles={profiles}
-        transactions={transactions}
-        goals={goals}
-        totalSavings={totalSavings}
-        userTotals={userTotals}
-        savingsTarget={target}
-        cutoffPeriods={cutoffPeriods}
-      />
+        <main className="max-w-4xl mx-auto px-4 sm:px-6 pt-4 md:pt-6 pb-4 md:pb-10 safe-area-px">
+          {/* Tab Navigation — tablet & desktop */}
+          <div className="hidden md:flex p-1 glass-panel rounded-2xl overflow-x-auto gap-0.5 mb-5 md:mb-8 shadow-[0_8px_40px_rgba(0,0,0,0.35)]">
+            {tabs.map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`flex-1 min-h-11 py-2.5 px-3 text-sm font-display font-bold rounded-xl capitalize transition-all duration-300 whitespace-nowrap ${
+                  activeTab === tab
+                    ? 'bg-[var(--surface-raised)] text-[var(--text)] shadow-[0_0_0_1px_var(--border-glow),0_12px_28px_rgba(0,0,0,0.35)]'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-[var(--surface-raised)]/40'
+                }`}
+              >
+                {tab === 'goals'
+                  ? '🎯 Goals'
+                  : tab === 'targets'
+                    ? '📅 Targets'
+                    : tab === 'games'
+                      ? '🎮 Games'
+                      : tab}
+              </button>
+            ))}
+          </div>
 
-      {/* Game Invite Notification */}
-      {pendingInvite && (
-        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 animate-slide-in-from-bottom-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 p-4 flex items-center gap-4 max-w-sm">
+          {/* Tab Content */}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 18, filter: 'blur(10px)' }}
+              animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, y: -12, filter: 'blur(8px)' }}
+              transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+              className="space-y-5 md:space-y-8"
+            >
+              <ErrorBoundary tabName={activeTab}>
+                {activeTab === 'overview' && (
+                  <Overview
+                    currentProfile={currentProfile}
+                    partnerProfile={partnerProfile}
+                    currentTheme={currentTheme}
+                    totalSavings={totalSavings}
+                    userTotals={userTotals}
+                    transactions={transactions}
+                    profiles={profiles}
+                    onDeleteTransaction={canWrite ? softDeleteTransaction : async () => {}}
+                  />
+                )}
+
+                {activeTab === 'targets' && (
+                  <SavingsTargets
+                    target={target}
+                    currentPeriodStats={currentPeriodStats}
+                    cutoffPeriods={cutoffPeriods}
+                    totalOwed={totalOwed}
+                    profiles={profiles}
+                    currentProfileId={currentProfileId ?? ''}
+                    currentTheme={currentTheme}
+                    onSetTarget={setTargetSettings}
+                    onToggleTarget={toggleTarget}
+                    onClosePeriod={closePeriod}
+                    onPayOwed={payOwed}
+                    onReopenPeriod={reopenPeriod}
+                  />
+                )}
+
+                {activeTab === 'goals' && (
+                  <Goals
+                    goals={goals}
+                    currentTheme={currentTheme}
+                    onAddGoal={handleAddGoal}
+                    onContribute={contributeToGoal}
+                    onDeleteGoal={deleteGoal}
+                  />
+                )}
+
+                {activeTab === 'analytics' && (
+                  <Analytics
+                    transactions={transactions}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    totalSavings={totalSavings}
+                    userTotals={userTotals}
+                  />
+                )}
+
+                {activeTab === 'games' && currentProfileId && (
+                  <MiniGames
+                    currentTheme={currentTheme}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    session={gameSession}
+                    onCreateSession={createSession}
+                    onUpdateSession={updateGameSession}
+                    onEndSession={endSession}
+                  />
+                )}
+
+                {activeTab === 'settings' && (
+                  <Settings
+                    currentProfile={currentProfile}
+                    currentTheme={currentTheme}
+                    onUpdateProfile={handleUpdateProfile}
+                  />
+                )}
+              </ErrorBoundary>
+            </motion.div>
+          </AnimatePresence>
+        </main>
+
+        <WanderingPetsOverlay />
+
+        {/* Floating Action Button */}
+        {canWrite && (
+          <button
+            type="button"
+            onClick={() => setShowAddModal(true)}
+            className="btn-chrome fixed z-40 right-4 md:right-6 bottom-[calc(5.25rem+env(safe-area-inset-bottom,0px)+12px)] md:bottom-6 h-14 w-14 md:h-16 md:w-16 rounded-2xl md:rounded-2xl p-[2px] bg-transparent border-0 shadow-none active:scale-[0.96] transition-transform"
+            aria-label="Add saving or spending"
+          >
+            <span className="flex h-full w-full items-center justify-center rounded-[0.875rem] md:rounded-[0.875rem] bg-[var(--surface-raised)] text-[var(--accent-a)]">
+              <Plus size={28} className="sm:w-8 sm:h-8" strokeWidth={2.5} />
+            </span>
+          </button>
+        )}
+
+        <MobileTabBar activeTab={activeTab} onChange={setActiveTab} />
+
+        {/* Transaction Modal */}
+        {showAddModal && (
+          <TransactionModal
+            theme={currentTheme}
+            profiles={profiles}
+            newTx={newTx}
+            goals={goals}
+            isSubmitting={isSubmitting}
+            onNewTxChange={setNewTx}
+            onSubmit={handleAddTransaction}
+            onClose={handleCloseModal}
+          />
+        )}
+
+        {/* AI Chat */}
+        <AIChat
+          isOpen={aiChatOpen}
+          onOpen={() => setAiChatOpen(true)}
+          onClose={() => setAiChatOpen(false)}
+          dataEnabled={dataEnabled}
+          currentTheme={currentTheme}
+          profiles={profiles}
+          transactions={transactions}
+          goals={goals}
+          totalSavings={totalSavings}
+          userTotals={userTotals}
+          savingsTarget={target}
+          cutoffPeriods={cutoffPeriods}
+        />
+
+        {/* Game Invite Notification */}
+        {pendingInvite && (
+          <div className="fixed top-[max(1rem,env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-50 animate-slide-in-from-bottom-4 px-3 w-full max-w-sm safe-area-px">
+          <div className="glass-panel rounded-2xl p-4 flex items-center gap-3 sm:gap-4">
             <div className="text-3xl">{profiles[pendingInvite.initiator]?.emoji || '🎮'}</div>
             <div className="flex-1 min-w-0">
-              <p className="font-bold text-slate-800 truncate">
+              <p className="font-display font-bold text-[var(--text)] truncate">
                 {profiles[pendingInvite.initiator]?.name || pendingInvite.initiator} wants to play!
               </p>
-              <p className="text-sm text-slate-500">
-                {pendingInvite.gameType === 'rps' ? '✊ Rock Paper Scissors'
-                  : pendingInvite.gameType === 'roulette' ? '🎰 Random Roulette'
-                  : pendingInvite.gameType === 'rng' ? '🔢 Number Generator'
-                  : '🤔 Decide For Me'}
+              <p className="text-sm text-[var(--text-dim)]">
+                {inviteLabelForGameType(pendingInvite.gameType)}
               </p>
             </div>
             <div className="flex gap-2 shrink-0">
-              <button onClick={handleDeclineGame} className="px-3 py-2 rounded-xl bg-slate-100 text-slate-500 font-bold text-sm hover:bg-slate-200 transition-colors">
+              <button
+                type="button"
+                onClick={handleDeclineGame}
+                className="px-3 py-2 rounded-xl border border-[var(--border)] bg-[var(--surface-raised)]/50 text-[var(--text-dim)] font-display font-bold text-sm hover:text-[var(--text)] transition-colors"
+              >
                 Nah
               </button>
-              <button onClick={handleAcceptGame} className={`px-3 py-2 rounded-xl text-white font-bold text-sm ${currentTheme.bgClass}`}>
+              <button
+                type="button"
+                onClick={handleAcceptGame}
+                className="px-3 py-2 rounded-xl text-white font-display font-bold text-sm bg-gradient-to-br from-[var(--accent-a)] to-[var(--accent-b)] shadow-lg shadow-black/30"
+              >
                 Join!
               </button>
             </div>
           </div>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
