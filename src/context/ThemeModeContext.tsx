@@ -27,12 +27,12 @@ function readStored(): UiThemeMode {
   } catch {
     /* ignore */
   }
-  return 'nebula';
+  return 'ember';
 }
 
 export function ThemeModeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<UiThemeMode>(() =>
-    typeof window !== 'undefined' ? readStored() : 'nebula'
+    typeof window !== 'undefined' ? readStored() : 'ember'
   );
 
   const setMode = useCallback((m: UiThemeMode) => {

@@ -1,7 +1,7 @@
 import {
   LayoutDashboard,
-  CalendarDays,
   Target,
+  Sparkles,
   BarChart3,
   Gamepad2,
   Settings,
@@ -11,8 +11,8 @@ import type { TabType } from '@/types';
 
 const NAV_ITEMS: { id: TabType; label: string; icon: LucideIcon }[] = [
   { id: 'overview', label: 'Home', icon: LayoutDashboard },
-  { id: 'targets', label: 'Targets', icon: CalendarDays },
   { id: 'goals', label: 'Goals', icon: Target },
+  { id: 'checklist', label: 'Together', icon: Sparkles },
   { id: 'analytics', label: 'Stats', icon: BarChart3 },
   { id: 'games', label: 'Play', icon: Gamepad2 },
   { id: 'settings', label: 'More', icon: Settings },

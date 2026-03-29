@@ -104,7 +104,7 @@ export function ChessGamePanel({
   const boardWidth = typeof window !== 'undefined' ? Math.min(340, window.innerWidth - 48) : 320;
 
   return (
-    <div className="space-y-4 overflow-visible">
+    <div className="game-modal-light space-y-4 overflow-visible">
       <p className="text-center text-sm font-bold text-slate-600">{statusText}</p>
       <div className="flex justify-center overflow-visible [&_.react-chessboard]:rounded-xl">
         <Chessboard

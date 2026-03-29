@@ -39,7 +39,10 @@ const admin = __importStar(require("firebase-admin"));
 const firestore_1 = require("firebase-admin/firestore");
 const genai_1 = require("@google/genai");
 const https_1 = require("firebase-functions/v2/https");
+const params_1 = require("firebase-functions/params");
 admin.initializeApp();
+/** Set with: `firebase functions:secrets:set GEMINI_API_KEY` then deploy. */
+const geminiApiKey = (0, params_1.defineSecret)('GEMINI_API_KEY');
 const db = admin.firestore();
 /** Must match `HOUSEHOLD_DATA_ROOT_DOC` in `src/lib/firestorePaths.ts`. */
 const HOUSEHOLD_DATA_ROOT = 'v1';
@@ -73,7 +76,10 @@ async function householdIdForUser(uid) {
 function hashPin(pin, salt) {
     return crypto.pbkdf2Sync(pin, salt, 120000, 32, 'sha256').toString('hex');
 }
-exports.generateAI = (0, https_1.onCall)(async (request) => {
+exports.generateAI = (0, https_1.onCall)({
+    secrets: [geminiApiKey],
+    region: 'us-central1',
+}, async (request) => {
     if (!request.auth?.uid)
         throw new https_1.HttpsError('unauthenticated', 'Sign in required');
     const { prompt, systemInstruction } = request.data;
@@ -83,9 +89,10 @@ exports.generateAI = (0, https_1.onCall)(async (request) => {
     if (prompt.length > 32000)
         throw new https_1.HttpsError('invalid-argument', 'prompt too long');
     await enforceRateLimit(request.auth.uid);
-    const key = process.env.GEMINI_API_KEY;
+    const key = geminiApiKey.value().trim() ||
+        (process.env.GEMINI_API_KEY && String(process.env.GEMINI_API_KEY).trim());
     if (!key) {
-        throw new https_1.HttpsError('failed-precondition', 'Server GEMINI_API_KEY is not set');
+        throw new https_1.HttpsError('failed-precondition', 'Gemini API key missing. Run: firebase functions:secrets:set GEMINI_API_KEY — see README.');
     }
     const ai = new genai_1.GoogleGenAI({ apiKey: key });
     const response = await ai.models.generateContent({

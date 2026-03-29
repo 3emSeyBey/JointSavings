@@ -28,7 +28,7 @@ export function getTodayISO(): string {
   return getTodayLocalISO();
 }
 
-/** Direct Gemini call — prefer generateAIText from aiClient for production. */
+/** Direct Gemini API call (used when `VITE_GEMINI_API_KEY` is set). */
 export async function callGemini(
   prompt: string,
   apiKey: string,

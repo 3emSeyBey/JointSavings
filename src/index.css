@@ -105,6 +105,54 @@
   background-color: color-mix(in srgb, var(--surface-raised) 80%, transparent) !important;
 }
 
+/*
+ * Mini-game modals (often portaled to body): keep light surfaces even when app uses dark glass
+ * in <main>. Also applies under main for in-tree fallbacks.
+ */
+[data-ui-theme] .game-modal-shell,
+[data-ui-theme] main .game-modal-shell {
+  background-color: #e0f2fe !important;
+  color: #0f172a !important;
+}
+
+[data-ui-theme] .game-modal-inner,
+[data-ui-theme] main .game-modal-inner {
+  background-color: #e0f2fe !important;
+  color: #0f172a !important;
+}
+
+[data-ui-theme] .game-modal-light,
+[data-ui-theme] .game-modal-light.bg-white,
+[data-ui-theme] .game-modal-light .bg-white,
+[data-ui-theme] main .game-modal-light,
+[data-ui-theme] main .game-modal-light.bg-white,
+[data-ui-theme] main .game-modal-light .bg-white {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}
+
+[data-ui-theme] .game-modal-light .bg-slate-50,
+[data-ui-theme] .game-modal-light.bg-slate-50,
+[data-ui-theme] main .game-modal-light .bg-slate-50,
+[data-ui-theme] main .game-modal-light.bg-slate-50 {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+[data-ui-theme] .game-modal-light .bg-slate-100,
+[data-ui-theme] .game-modal-light .bg-blue-100,
+[data-ui-theme] main .game-modal-light .bg-slate-100,
+[data-ui-theme] main .game-modal-light .bg-blue-100 {
+  background-color: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+[data-ui-theme] .game-modal-light .bg-blue-50,
+[data-ui-theme] main .game-modal-light .bg-blue-50 {
+  background-color: #eff6ff !important;
+  color: #0f172a !important;
+}
+
 [data-ui-theme] main .divide-slate-100 > :not([hidden]) ~ :not([hidden]) {
   border-color: var(--border) !important;
 }
@@ -370,4 +418,73 @@
   .mm-overview-float-alt {
     animation: none !important;
   }
+}
+
+/* Checklist rich text (TipTap / read view) */
+.checklist-rich-editor .ProseMirror {
+  outline: none;
+  min-height: 120px;
+  color: var(--text);
+}
+.checklist-rich-editor .ProseMirror p.is-editor-empty:first-child::before {
+  color: var(--text-dim);
+  opacity: 0.65;
+}
+.checklist-rich-editor .ProseMirror p {
+  margin: 0.4em 0;
+}
+.checklist-rich-editor .ProseMirror h2 {
+  font-size: 1.05rem;
+  font-weight: 800;
+  margin: 0.75em 0 0.35em;
+  font-family: var(--font-display, inherit);
+}
+.checklist-rich-editor .ProseMirror h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0.65em 0 0.3em;
+}
+.checklist-rich-editor .ProseMirror ul,
+.checklist-rich-editor .ProseMirror ol {
+  padding-left: 1.35rem;
+  margin: 0.4em 0;
+}
+.checklist-rich-editor .ProseMirror blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--accent-a) 55%, transparent);
+  margin: 0.5em 0;
+  padding-left: 0.85rem;
+  color: var(--text-dim);
+}
+.checklist-rich-read.prose-invert,
+.checklist-rich-read {
+  line-height: 1.55;
+}
+.checklist-rich-read p {
+  margin: 0.4em 0;
+}
+.checklist-rich-read h2 {
+  font-size: 1.05rem;
+  font-weight: 800;
+  margin: 0.6em 0 0.3em;
+  color: var(--text);
+}
+.checklist-rich-read h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0.5em 0 0.25em;
+}
+.checklist-rich-read ul,
+.checklist-rich-read ol {
+  padding-left: 1.35rem;
+  margin: 0.4em 0;
+}
+.checklist-rich-read a {
+  color: var(--accent-a);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.checklist-rich-read blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--accent-a) 50%, transparent);
+  padding-left: 0.85rem;
+  margin: 0.5em 0;
 }

@@ -7,13 +7,14 @@ import {
   CircleDot,
   Grid3x3,
   Circle,
+  LayoutGrid,
   type LucideIcon,
 } from 'lucide-react';
 import type { GameSession } from '@/hooks/useGameSession';
 
 export type CatalogGameId = GameSession['gameType'];
 
-export type GameCategoryId = 'quick' | 'board';
+export type GameCategoryId = 'quick' | 'board' | 'solo';
 
 export interface CatalogGameMeta {
   id: CatalogGameId;
@@ -30,6 +31,7 @@ export const GAME_IMPLEMENTATION_NOTE: Partial<Record<CatalogGameId, string>> = 
   checkers: 'Custom engine (8×8, jumps & slides)',
   connect4: 'Built-in grid',
   ttt: 'Built-in grid',
+  linePuzzle: 'Local state only — solo line-clear puzzle',
 };
 
 export const GAME_CATALOG: CatalogGameMeta[] = [
@@ -97,6 +99,14 @@ export const GAME_CATALOG: CatalogGameMeta[] = [
     emoji: '⭕',
     category: 'board',
   },
+  {
+    id: 'linePuzzle',
+    title: 'Line clear puzzle',
+    description: 'Fill rows & columns on an 8×8 board — solo, on this device',
+    icon: LayoutGrid,
+    emoji: '🧩',
+    category: 'solo',
+  },
 ];
 
 export function catalogMeta(id: CatalogGameId): CatalogGameMeta | undefined {
@@ -121,6 +131,8 @@ export function inviteLabelForGameType(gameType: CatalogGameId): string {
       return '🔴 Connect Four';
     case 'ttt':
       return '⭕ Tic-Tac-Toe';
+    case 'linePuzzle':
+      return '🧩 Line clear puzzle';
     default:
       return '🎮 Mini game';
   }

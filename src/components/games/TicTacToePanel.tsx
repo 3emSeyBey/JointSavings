@@ -82,7 +82,7 @@ export function TicTacToePanel({
     v === 'pea' ? '✕' : v === 'cam' ? '○' : '';
 
   return (
-    <div className="space-y-4">
+    <div className="game-modal-light space-y-4">
       {winner && (
         <p className="text-center text-lg font-bold text-emerald-600">
           {winner === 'pea' ? 'Pea' : 'Cam'} wins! 🎉

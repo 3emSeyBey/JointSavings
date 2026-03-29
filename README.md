@@ -50,7 +50,7 @@ A beautiful React application for couples to track their joint savings together,
    # App Configuration
    VITE_APP_ID=joint-savings-app
 
-   # Gemini AI (optional - for AI Coach feature)
+   # Gemini AI (recommended for AI coach — direct API, no Functions required)
    VITE_GEMINI_API_KEY=your_gemini_api_key
    ```
 
@@ -134,6 +134,14 @@ JointSavings/
 ├── vite.config.ts
 └── README.md
 ```
+
+## AI coach (Gemini)
+
+**Default (no Cloud Functions):** add your Gemini API key to `.env` as **`VITE_GEMINI_API_KEY`**. The app calls the [Gemini API](https://aistudio.google.com/apikey) directly from the browser. You pay only Google’s Gemini usage (free tier may apply), not Firebase Functions.
+
+- Never commit real keys. Add `.env` to git ignore (already listed).
+
+**Optional — server proxy:** if you omit `VITE_GEMINI_API_KEY`, the app can use the **`generateAI`** Cloud Function instead (key stored in Firebase Secret Manager, `firebase deploy --only functions`, secret `GEMINI_API_KEY`, region `us-central1`; set `VITE_FUNCTIONS_REGION` if needed). Use this if you don’t want the key in client bundles.
 
 ## Firebase Setup
 

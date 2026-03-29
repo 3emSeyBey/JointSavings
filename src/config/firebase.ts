@@ -33,7 +33,7 @@ if (envCheck.ok) {
 export { app, auth, db, functions };
 
 export const APP_ID = import.meta.env.VITE_APP_ID || 'joint-savings-app';
-/** @deprecated Use Cloud Function proxy (A-005). Optional for local dev only. */
+/** Browser-side Gemini key (`VITE_GEMINI_API_KEY`). Default path for the AI coach; keep out of git. */
 export const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
 
 /** Default household for data scoping (A-001). Override per deployment. */

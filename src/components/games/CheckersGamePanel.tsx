@@ -115,7 +115,7 @@ export function CheckersGamePanel({
         : null;
 
   return (
-    <div className="space-y-4">
+    <div className="game-modal-light space-y-4">
       {winnerLabel && (
         <p className="text-center text-lg font-bold text-emerald-600">{winnerLabel} 🎉</p>
       )}

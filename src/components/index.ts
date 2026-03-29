@@ -8,10 +8,10 @@ export { Goals } from './Goals';
 export { Analytics } from './Analytics';
 export { AIChat } from './AIChat';
 export { ParticlesBackground } from './ParticlesBackground';
-export { SavingsTargets } from './SavingsTargets';
 export { MiniGames } from './MiniGames';
 export { MobileTabBar } from './MobileTabBar';
 export { MeshBackdrop } from './MeshBackdrop';
 export { DashboardWhimsy } from './DashboardWhimsy';
 export { WanderingPetsOverlay } from './WanderingPetsOverlay';
+export { ChecklistTab } from './ChecklistTab';
 

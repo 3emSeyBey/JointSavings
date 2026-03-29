@@ -6,7 +6,16 @@ import { initialBoardStateJson, type BoardGameKind } from '@/lib/boardGameState'
 
 export interface GameSession {
   id: string;
-  gameType: 'rps' | 'roulette' | 'rng' | 'decide' | 'chess' | 'checkers' | 'connect4' | 'ttt';
+  gameType:
+    | 'rps'
+    | 'roulette'
+    | 'rng'
+    | 'decide'
+    | 'chess'
+    | 'checkers'
+    | 'connect4'
+    | 'ttt'
+    | 'linePuzzle';
   status: 'pending' | 'active' | 'finished';
   /** When true, only `initiator` sees the session; starts active with no partner invite. */
   solo?: boolean;
@@ -63,7 +72,7 @@ export function useGameSession(enabled: boolean, currentProfileId: string | null
     if (!currentProfileId || !db) return;
     const ref = getSessionDocRef();
     if (!ref) return;
-    const solo = opts?.solo === true;
+    const solo = gameType === 'linePuzzle' ? true : opts?.solo === true;
     const boardKinds: BoardGameKind[] = ['chess', 'checkers', 'connect4', 'ttt'];
     const boardStateJson = boardKinds.includes(gameType as BoardGameKind)
       ? initialBoardStateJson(gameType as BoardGameKind)

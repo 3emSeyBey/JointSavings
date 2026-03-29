@@ -1,18 +1,21 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { Gamepad2, X, Plus, RotateCcw, Send, User, Users } from 'lucide-react';
 import { generateAIText } from '@/lib/aiClient';
 import type { Theme, Profile } from '@/types';
 import type { GameSession } from '@/hooks/useGameSession';
-import { GAME_CATALOG, catalogMeta, type CatalogGameId } from '@/lib/gameCatalog';
+import { GAME_CATALOG, GAME_IMPLEMENTATION_NOTE, catalogMeta, type CatalogGameId } from '@/lib/gameCatalog';
 import { ChessGamePanel } from '@/components/games/ChessGamePanel';
 import { CheckersGamePanel } from '@/components/games/CheckersGamePanel';
 import { ConnectFourPanel } from '@/components/games/ConnectFourPanel';
 import { TicTacToePanel } from '@/components/games/TicTacToePanel';
+import { LinePuzzlePanel } from '@/components/games/LinePuzzlePanel';
 
 type RPSChoice = 'rock' | 'paper' | 'scissors';
 
 const QUICK_GAMES = GAME_CATALOG.filter((g) => g.category === 'quick');
 const BOARD_GAMES = GAME_CATALOG.filter((g) => g.category === 'board');
+const SOLO_GAMES = GAME_CATALOG.filter((g) => g.category === 'solo');
 
 const BOARD_GAME_IDS: CatalogGameId[] = ['chess', 'checkers', 'connect4', 'ttt'];
 
@@ -109,7 +112,7 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
   })();
 
   return (
-    <div className="space-y-6">
+    <div className="game-modal-light space-y-6">
       {/* Scoreboard */}
       <div className="flex items-center justify-center gap-6">
         {solo ? (
@@ -119,7 +122,7 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
               <div className="text-sm font-bold text-slate-600">You</div>
               <div className="text-3xl font-bold text-slate-800">{yourScore}</div>
             </div>
-            <div className="text-slate-300 text-2xl font-bold">vs</div>
+            <div className="text-slate-400 text-2xl font-bold">vs</div>
             <div className="text-center">
               <div className="text-2xl mb-1">🎲</div>
               <div className="text-sm font-bold text-slate-600">House</div>
@@ -133,7 +136,7 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
               <div className="text-sm font-bold text-slate-600">{profiles.pea?.name || 'Pea'}</div>
               <div className="text-3xl font-bold text-slate-800">{session.rpsScorePea}</div>
             </div>
-            <div className="text-slate-300 text-2xl font-bold">vs</div>
+            <div className="text-slate-400 text-2xl font-bold">vs</div>
             <div className="text-center">
               <div className="text-2xl mb-1">{profiles.cam?.emoji || '📸'}</div>
               <div className="text-sm font-bold text-slate-600">{profiles.cam?.name || 'Cam'}</div>
@@ -158,7 +161,7 @@ function RPSGame({ session, currentProfileId, profiles, currentTheme, onUpdate }
               </div>
               <div className="text-5xl">{RPS_CHOICES.find(c => c.id === session.peaChoice)?.emoji}</div>
             </div>
-            <div className="text-2xl font-bold text-slate-300">vs</div>
+            <div className="text-2xl font-bold text-slate-400">vs</div>
             <div className="text-center">
               <div className="text-sm font-bold text-slate-400 mb-2">
                 {solo ? '🎲 House' : `${profiles.cam?.emoji} ${profiles.cam?.name}`}
@@ -279,7 +282,7 @@ function RouletteGame({ session, currentTheme, onUpdate }: SubGameProps) {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="game-modal-light space-y-6">
       <div>
         <label className="text-xs font-bold text-slate-400 uppercase block mb-2">Add Options</label>
         <div className="flex gap-2">
@@ -370,7 +373,7 @@ function RNGGame({ session, currentTheme, onUpdate }: SubGameProps) {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="game-modal-light space-y-6">
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className="text-xs font-bold text-slate-400 uppercase block mb-2">Min</label>
@@ -518,7 +521,7 @@ function DecideGame({ session, currentTheme, onUpdate }: SubGameProps) {
   // ── Setup phase ──
   if (isSetup) {
     return (
-      <div className="space-y-5">
+      <div className="game-modal-light space-y-5">
         <div>
           <label className="text-xs font-bold text-slate-400 uppercase block mb-2">What do you need to decide?</label>
           <input type="text" placeholder="e.g., Where to eat tonight?" value={question}
@@ -571,7 +574,7 @@ function DecideGame({ session, currentTheme, onUpdate }: SubGameProps) {
 
   // ── Conversation / Result phase ──
   return (
-    <div className="space-y-4">
+    <div className="game-modal-light space-y-4">
       <div className="bg-slate-50 rounded-xl p-3">
         <p className="text-sm font-bold text-slate-700">&ldquo;{session.decideQuestion}&rdquo;</p>
         <p className="text-xs text-slate-400 mt-1">{(session.decideOptions || []).join(' · ')}</p>
@@ -648,6 +651,7 @@ interface MiniGamesProps {
 
 export function MiniGames({ currentTheme, currentProfileId, profiles, session, onCreateSession, onUpdateSession, onEndSession }: MiniGamesProps) {
   const [playAlone, setPlayAlone] = useState(false);
+  const miniGamesRootRef = useRef<HTMLDivElement>(null);
   const partnerId = currentProfileId === 'pea' ? 'cam' : 'pea';
   const partnerName = profiles[partnerId]?.name || partnerId;
 
@@ -667,8 +671,159 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
   const sessionBusy = visibleSession !== null;
   const boardGameLayout = visibleSession && isBoardGameId(visibleSession.gameType);
 
+  useLayoutEffect(() => {
+    if (!showModal) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    miniGamesRootRef.current?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [showModal]);
+
+  const gameModal =
+    showModal && visibleSession && activeGameMeta ? (
+      <div
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/40 p-4 backdrop-blur-2xl backdrop-saturate-150"
+        role="presentation"
+      >
+        <div
+          className={`game-modal-shell flex max-h-[min(92dvh,880px)] w-full flex-col overflow-hidden rounded-3xl border border-sky-200/90 bg-sky-100 shadow-2xl ${
+            boardGameLayout
+              ? 'max-w-lg sm:max-w-xl animate-in'
+              : 'max-w-md animate-slide-in-from-bottom-4'
+          }`}
+        >
+          <div className="shrink-0 border-b border-blue-500/40 bg-gradient-to-br from-blue-600 via-blue-600 to-indigo-700 p-6 text-white">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="flex flex-wrap items-center gap-2 text-xl font-bold">
+                {activeGameMeta.emoji} {activeGameMeta.title}
+                {visibleSession.solo && (
+                  <span className="rounded-lg bg-white/20 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wider">
+                    Solo
+                  </span>
+                )}
+              </h3>
+              <button
+                type="button"
+                onClick={onEndSession}
+                className="shrink-0 rounded-full p-1 hover:bg-white/20"
+                aria-label="Close game"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <p className="mt-2 text-xs font-medium text-blue-100/95">
+              Mini game — you&apos;re still on Games / Play; close to return to the list
+            </p>
+          </div>
+          <div
+            className={`game-modal-inner game-modal-light min-h-0 flex-1 bg-sky-100 ${
+              boardGameLayout ? 'overflow-visible p-4 sm:p-6' : 'overflow-y-auto overscroll-contain p-4'
+            }`}
+          >
+            {visibleSession.status === 'pending' ? (
+              <div className="game-modal-light rounded-2xl border border-blue-100 bg-white p-6 text-center shadow-sm">
+                <div className="space-y-4 py-2">
+                  <div className="text-5xl">⏳</div>
+                  <h3 className="text-lg font-bold text-slate-800">Waiting for {partnerName} to join...</h3>
+                  <p className="text-sm text-slate-500">They&apos;ll get a notification to join</p>
+                  <div className="flex justify-center">
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={onEndSession}
+                    className="rounded-xl bg-slate-100 px-6 py-2 text-sm font-bold text-slate-600 transition-colors hover:bg-slate-200"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {visibleSession.gameType === 'rps' && (
+                  <RPSGame
+                    session={visibleSession}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    onUpdate={onUpdateSession}
+                  />
+                )}
+                {visibleSession.gameType === 'roulette' && (
+                  <RouletteGame
+                    session={visibleSession}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    onUpdate={onUpdateSession}
+                  />
+                )}
+                {visibleSession.gameType === 'rng' && (
+                  <RNGGame
+                    session={visibleSession}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    onUpdate={onUpdateSession}
+                  />
+                )}
+                {visibleSession.gameType === 'decide' && (
+                  <DecideGame
+                    session={visibleSession}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    onUpdate={onUpdateSession}
+                  />
+                )}
+                {visibleSession.gameType === 'chess' && (
+                  <ChessGamePanel
+                    session={visibleSession}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    onUpdate={onUpdateSession}
+                  />
+                )}
+                {visibleSession.gameType === 'checkers' && (
+                  <CheckersGamePanel
+                    session={visibleSession}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    onUpdate={onUpdateSession}
+                  />
+                )}
+                {visibleSession.gameType === 'connect4' && (
+                  <ConnectFourPanel
+                    session={visibleSession}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    onUpdate={onUpdateSession}
+                  />
+                )}
+                {visibleSession.gameType === 'ttt' && (
+                  <TicTacToePanel
+                    session={visibleSession}
+                    currentProfileId={currentProfileId}
+                    profiles={profiles}
+                    currentTheme={currentTheme}
+                    onUpdate={onUpdateSession}
+                  />
+                )}
+                {visibleSession.gameType === 'linePuzzle' && <LinePuzzlePanel />}
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    ) : null;
+
   return (
-    <div className="space-y-6">
+    <div ref={miniGamesRootRef} className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
           <Gamepad2 size={24} /> Mini Games
@@ -676,7 +831,7 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
         <p className="text-slate-500 text-sm">
           {playAlone
             ? 'Practice on your device — no invite, no waiting.'
-            : 'Challenge your partner across devices!'}
+            : 'Challenge your partner across devices! Solo puzzles always open on this device only.'}
         </p>
       </div>
 
@@ -782,6 +937,45 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
             })}
           </div>
         </div>
+
+        <div>
+          <h3 className="text-sm font-extrabold uppercase tracking-wider text-slate-400 mb-1">Solo puzzles</h3>
+          <p className="text-xs text-slate-400 mb-3">
+            {GAME_IMPLEMENTATION_NOTE.linePuzzle}. Always opens in solo mode — progress stays on this device.
+          </p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            {SOLO_GAMES.map((game) => {
+              const Icon = game.icon;
+              return (
+                <button
+                  key={game.id}
+                  type="button"
+                  onClick={() => !sessionBusy && onCreateSession(game.id, { solo: true })}
+                  disabled={sessionBusy}
+                  className={`bg-white rounded-2xl border border-slate-100 p-6 text-left shadow-sm transition-all group ${
+                    sessionBusy
+                      ? 'opacity-50 cursor-not-allowed'
+                      : 'hover:shadow-md hover:scale-[1.02] active:scale-[0.98]'
+                  }`}
+                >
+                  <div
+                    className={`w-14 h-14 rounded-xl flex items-center justify-center text-3xl mb-4 ${currentTheme.lightBg}`}
+                  >
+                    {game.emoji}
+                  </div>
+                  <h4 className="font-bold text-slate-800 mb-1 flex flex-wrap items-center gap-2">
+                    {game.title}
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 bg-slate-100 px-2 py-0.5 rounded-md">
+                      Solo only
+                    </span>
+                    <Icon size={16} className="text-slate-300 group-hover:text-slate-500 transition-colors" />
+                  </h4>
+                  <p className="text-slate-400 text-sm">{game.description}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
       {visibleSession && !showModal && (
@@ -792,122 +986,7 @@ export function MiniGames({ currentTheme, currentProfileId, profiles, session, o
         </div>
       )}
 
-      {/* Game Modal */}
-      {showModal && visibleSession && activeGameMeta && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div
-            className={`bg-white rounded-3xl w-full shadow-2xl max-h-[90vh] flex flex-col ${
-              boardGameLayout
-                ? 'max-w-lg sm:max-w-xl overflow-visible animate-in'
-                : 'max-w-md overflow-hidden animate-slide-in-from-bottom-4'
-            }`}
-          >
-            <div className={`p-6 text-white ${currentTheme.bgClass} shrink-0`}>
-              <div className="flex justify-between items-center gap-2">
-                <h3 className="font-bold text-xl flex flex-wrap items-center gap-2">
-                  {activeGameMeta.emoji} {activeGameMeta.title}
-                  {visibleSession.solo && (
-                    <span className="text-[10px] font-extrabold uppercase tracking-wider bg-white/20 px-2 py-0.5 rounded-lg">
-                      Solo
-                    </span>
-                  )}
-                </h3>
-                <button type="button" onClick={onEndSession} className="hover:bg-white/20 p-1 rounded-full shrink-0">
-                  <X size={20} />
-                </button>
-              </div>
-            </div>
-            <div className={boardGameLayout ? 'p-6 overflow-visible' : 'p-6 overflow-y-auto'}>
-              {visibleSession.status === 'pending' ? (
-                <div className="text-center space-y-4 py-4">
-                  <div className="text-5xl">⏳</div>
-                  <h3 className="text-lg font-bold text-slate-800">Waiting for {partnerName} to join...</h3>
-                  <p className="text-slate-400 text-sm">They&apos;ll get a notification to join</p>
-                  <div className="flex justify-center"><div className="w-6 h-6 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin" /></div>
-                  <button onClick={onEndSession} className="px-6 py-2 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors text-sm">
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {visibleSession.gameType === 'rps' && (
-                    <RPSGame
-                      session={visibleSession}
-                      currentProfileId={currentProfileId}
-                      profiles={profiles}
-                      currentTheme={currentTheme}
-                      onUpdate={onUpdateSession}
-                    />
-                  )}
-                  {visibleSession.gameType === 'roulette' && (
-                    <RouletteGame
-                      session={visibleSession}
-                      currentProfileId={currentProfileId}
-                      profiles={profiles}
-                      currentTheme={currentTheme}
-                      onUpdate={onUpdateSession}
-                    />
-                  )}
-                  {visibleSession.gameType === 'rng' && (
-                    <RNGGame
-                      session={visibleSession}
-                      currentProfileId={currentProfileId}
-                      profiles={profiles}
-                      currentTheme={currentTheme}
-                      onUpdate={onUpdateSession}
-                    />
-                  )}
-                  {visibleSession.gameType === 'decide' && (
-                    <DecideGame
-                      session={visibleSession}
-                      currentProfileId={currentProfileId}
-                      profiles={profiles}
-                      currentTheme={currentTheme}
-                      onUpdate={onUpdateSession}
-                    />
-                  )}
-                  {visibleSession.gameType === 'chess' && (
-                    <ChessGamePanel
-                      session={visibleSession}
-                      currentProfileId={currentProfileId}
-                      profiles={profiles}
-                      currentTheme={currentTheme}
-                      onUpdate={onUpdateSession}
-                    />
-                  )}
-                  {visibleSession.gameType === 'checkers' && (
-                    <CheckersGamePanel
-                      session={visibleSession}
-                      currentProfileId={currentProfileId}
-                      profiles={profiles}
-                      currentTheme={currentTheme}
-                      onUpdate={onUpdateSession}
-                    />
-                  )}
-                  {visibleSession.gameType === 'connect4' && (
-                    <ConnectFourPanel
-                      session={visibleSession}
-                      currentProfileId={currentProfileId}
-                      profiles={profiles}
-                      currentTheme={currentTheme}
-                      onUpdate={onUpdateSession}
-                    />
-                  )}
-                  {visibleSession.gameType === 'ttt' && (
-                    <TicTacToePanel
-                      session={visibleSession}
-                      currentProfileId={currentProfileId}
-                      profiles={profiles}
-                      currentTheme={currentTheme}
-                      onUpdate={onUpdateSession}
-                    />
-                  )}
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {typeof document !== 'undefined' && createPortal(gameModal, document.body)}
     </div>
   );
 }

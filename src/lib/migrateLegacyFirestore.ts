@@ -41,16 +41,6 @@ export async function migrateLegacyToHouseholdIfNeeded(db: Firestore): Promise<v
     batch.set(householdDataDoc(db, 'goals', d.id), d.data());
   }
 
-  const legacyTargetSnap = await getDoc(legacyDataDoc(db, APP_ID, 'savingsTarget', 'current'));
-  if (legacyTargetSnap.exists()) {
-    batch.set(householdDataDoc(db, 'savingsTarget', 'current'), legacyTargetSnap.data()!);
-  }
-
-  const legacyPeriodsSnap = await getDocs(legacyDataCollection(db, APP_ID, 'cutoffPeriods'));
-  for (const d of legacyPeriodsSnap.docs) {
-    batch.set(householdDataDoc(db, 'cutoffPeriods', d.id), d.data());
-  }
-
   const legacyGameSnap = await getDoc(legacyDataDoc(db, APP_ID, 'gameSessions', 'active'));
   if (legacyGameSnap.exists()) {
     batch.set(householdDataDoc(db, 'gameSessions', 'active'), legacyGameSnap.data()!);

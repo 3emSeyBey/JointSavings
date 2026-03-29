@@ -3,8 +3,12 @@ import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { GoogleGenAI } from '@google/genai';
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { defineSecret } from 'firebase-functions/params';
 
 admin.initializeApp();
+
+/** Set with: `firebase functions:secrets:set GEMINI_API_KEY` then deploy. */
+const geminiApiKey = defineSecret('GEMINI_API_KEY');
 const db = admin.firestore();
 
 /** Must match `HOUSEHOLD_DATA_ROOT_DOC` in `src/lib/firestorePaths.ts`. */
@@ -43,7 +47,12 @@ function hashPin(pin: string, salt: string): string {
   return crypto.pbkdf2Sync(pin, salt, 120000, 32, 'sha256').toString('hex');
 }
 
-export const generateAI = onCall(async (request) => {
+export const generateAI = onCall(
+  {
+    secrets: [geminiApiKey],
+    region: 'us-central1',
+  },
+  async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Sign in required');
   const { prompt, systemInstruction } = request.data as {
     prompt?: string;
@@ -56,9 +65,14 @@ export const generateAI = onCall(async (request) => {
 
   await enforceRateLimit(request.auth.uid);
 
-  const key = process.env.GEMINI_API_KEY;
+  const key =
+    geminiApiKey.value().trim() ||
+    (process.env.GEMINI_API_KEY && String(process.env.GEMINI_API_KEY).trim());
   if (!key) {
-    throw new HttpsError('failed-precondition', 'Server GEMINI_API_KEY is not set');
+    throw new HttpsError(
+      'failed-precondition',
+      'Gemini API key missing. Run: firebase functions:secrets:set GEMINI_API_KEY — see README.'
+    );
   }
 
   const ai = new GoogleGenAI({ apiKey: key });
@@ -71,7 +85,8 @@ export const generateAI = onCall(async (request) => {
   });
 
   return { text: response.text || '' };
-});
+  }
+);
 
 export const setProfilePin = onCall(async (request) => {
   if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Sign in required');

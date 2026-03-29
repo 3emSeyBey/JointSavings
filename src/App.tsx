@@ -5,8 +5,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { useToast } from '@/context/ToastContext';
 import { useSession } from '@/hooks/useSession';
 import { useProfiles, useTransactions, useGoals } from '@/hooks/useFirestore';
-import { useSavingsTarget } from '@/hooks/useSavingsTarget';
 import { useGameSession } from '@/hooks/useGameSession';
+import { useChecklist } from '@/hooks/useChecklist';
+import { usePartnerPromises } from '@/hooks/usePartnerPromises';
 import { useHouseholdMembership } from '@/hooks/useHouseholdMembership';
 import { THEMES, DEFAULT_PROFILES } from '@/lib/constants';
 import { getTodayISO } from '@/lib/utils';
@@ -25,9 +26,9 @@ import {
   MeshBackdrop,
   DashboardWhimsy,
   WanderingPetsOverlay,
-  SavingsTargets,
   MiniGames,
   MobileTabBar,
+  ChecklistTab,
 } from '@/components';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import type { ViewType, TabType, NewTransaction, Profile, NewGoal } from '@/types';
@@ -70,17 +71,13 @@ export default function App() {
   );
   const { goals, addGoal, contributeToGoal, deleteGoal } = useGoals(dataEnabled);
   const {
-    target,
-    currentPeriodStats,
-    cutoffPeriods,
-    totalOwed,
-    setTargetSettings,
-    toggleTarget,
-    closePeriod,
-    payOwed,
-    reopenPeriod,
-  } = useSavingsTarget(dataEnabled, transactions, profileIds);
-
+    checklistItems,
+    addChecklistItem,
+    updateChecklistItem,
+    deleteChecklistItem,
+    setChecklistCompleted,
+  } = useChecklist(dataEnabled, user?.uid);
+  const { partnerPromisesByProfileId, savePartnerPromise } = usePartnerPromises(dataEnabled);
   // View & Navigation State
   const [view, setView] = useState<ViewType>('login');
   const [currentProfileId, setCurrentProfileId] = useState<string | null>(null);
@@ -286,7 +283,7 @@ export default function App() {
   // Render Dashboard
   if (!currentProfile) return null;
 
-  const tabs: TabType[] = ['overview', 'targets', 'goals', 'analytics', 'games', 'settings'];
+  const tabs: TabType[] = ['overview', 'goals', 'checklist', 'analytics', 'games', 'settings'];
 
   return (
     <div className="relative min-h-dvh font-sans text-[var(--text)] pb-[calc(5.25rem+env(safe-area-inset-bottom,0px))] md:pb-0 overflow-x-hidden">
@@ -317,8 +314,8 @@ export default function App() {
               >
                 {tab === 'goals'
                   ? '🎯 Goals'
-                  : tab === 'targets'
-                    ? '📅 Targets'
+                  : tab === 'checklist'
+                    ? '✨ Together'
                     : tab === 'games'
                       ? '🎮 Games'
                       : tab}
@@ -350,23 +347,6 @@ export default function App() {
                   />
                 )}
 
-                {activeTab === 'targets' && (
-                  <SavingsTargets
-                    target={target}
-                    currentPeriodStats={currentPeriodStats}
-                    cutoffPeriods={cutoffPeriods}
-                    totalOwed={totalOwed}
-                    profiles={profiles}
-                    currentProfileId={currentProfileId ?? ''}
-                    currentTheme={currentTheme}
-                    onSetTarget={setTargetSettings}
-                    onToggleTarget={toggleTarget}
-                    onClosePeriod={closePeriod}
-                    onPayOwed={payOwed}
-                    onReopenPeriod={reopenPeriod}
-                  />
-                )}
-
                 {activeTab === 'goals' && (
                   <Goals
                     goals={goals}
@@ -374,6 +354,23 @@ export default function App() {
                     onAddGoal={handleAddGoal}
                     onContribute={contributeToGoal}
                     onDeleteGoal={deleteGoal}
+                  />
+                )}
+
+                {activeTab === 'checklist' && currentProfileId && (
+                  <ChecklistTab
+                    items={checklistItems}
+                    canWrite={canWrite}
+                    currentTheme={currentTheme}
+                    profiles={profiles}
+                    profileIds={profileIds}
+                    currentProfileId={currentProfileId}
+                    partnerPromisesByProfileId={partnerPromisesByProfileId}
+                    onSavePartnerPromise={savePartnerPromise}
+                    onAdd={addChecklistItem}
+                    onUpdate={updateChecklistItem}
+                    onDelete={deleteChecklistItem}
+                    onSetCompleted={setChecklistCompleted}
                   />
                 )}
 
@@ -455,8 +452,8 @@ export default function App() {
           goals={goals}
           totalSavings={totalSavings}
           userTotals={userTotals}
-          savingsTarget={target}
-          cutoffPeriods={cutoffPeriods}
+          checklistItems={checklistItems}
+          partnerPromisesByProfileId={partnerPromisesByProfileId}
         />
 
         {/* Game Invite Notification */}

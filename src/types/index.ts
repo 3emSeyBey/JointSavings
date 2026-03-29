@@ -81,28 +81,61 @@ export interface ChatMessage {
   timestamp: Date;
 }
 
-export interface SavingsTarget {
+/** Shared checklist: task, purchase, or life intention (us or relationship). */
+export type ChecklistItemKind = 'task' | 'purchase' | 'life_us' | 'life_relationship';
+
+export type ChecklistDueKind = 'none' | 'day' | 'week' | 'month';
+
+export type ChecklistHorizon = 'short' | 'long';
+
+export interface ChecklistItem {
   id: string;
-  targetAmount: number; // Target per person per cutoff
-  isActive: boolean;
-  cutoffDays: number[]; // e.g., [15, 0] where 0 means last day of month
+  title: string;
+  /** Sanitized HTML from rich text editor */
+  descriptionHtml: string;
+  kind: ChecklistItemKind;
+  dueKind: ChecklistDueKind;
+  /** `YYYY-MM-DD` | `YYYY-Www` (week input) | `YYYY-MM` | null */
+  dueValue: string | null;
+  horizon: ChecklistHorizon;
+  consequence: string | null;
+  completed: boolean;
+  completedAt: string | null;
   createdAt: string;
+  createdBy: string;
+  updatedAt: string;
 }
 
-export interface CutoffPeriod {
-  id: string;
-  startDate: string;
-  endDate: string;
-  targetAmount: number;
-  /** Per profile/member id (A-002) */
-  contributions: Record<string, number>;
-  owedAmounts: Record<string, number>;
-  isComplete: boolean;
-  createdAt: string;
+export interface ChecklistItemInput {
+  title: string;
+  descriptionHtml: string;
+  kind: ChecklistItemKind;
+  dueKind: ChecklistDueKind;
+  dueValue: string | null;
+  horizon: ChecklistHorizon;
+  consequence: string | null;
+}
+
+/**
+ * One solemn commitment per partner (Together tab). Doc id = profileId (e.g. pea, cam).
+ */
+export interface PartnerPromise {
+  profileId: string;
+  text: string;
+  declaredAt: string;
+  updatedAt: string;
+  /** Times the text was changed after the first declaration */
+  revisedCount: number;
 }
 
 export type ViewType = 'login' | 'dashboard';
-export type TabType = 'overview' | 'analytics' | 'goals' | 'targets' | 'games' | 'settings';
+export type TabType =
+  | 'overview'
+  | 'analytics'
+  | 'goals'
+  | 'checklist'
+  | 'games'
+  | 'settings';
 
 export type HouseholdRole = 'owner' | 'member' | 'viewer';
 

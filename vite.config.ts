@@ -12,7 +12,7 @@ export default defineConfig({
       manifest: {
         name: 'Money Mates — Joint Savings',
         short_name: 'Money Mates',
-        description: 'Track joint savings, goals, and bi-monthly targets together.',
+        description: 'Track joint savings, goals, and shared intentions together.',
         theme_color: '#0f172a',
         background_color: '#f1f5f9',
         display: 'standalone',
